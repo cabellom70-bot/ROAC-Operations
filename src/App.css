@@ -1,0 +1,185 @@
+:root {
+  font-family: Arial, Helvetica, sans-serif;
+  color: #172033;
+  background: #eef2f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #eef2f7;
+}
+
+button {
+  font: inherit;
+}
+
+.app {
+  width: min(100%, 520px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 24px 18px 40px;
+  background: #f8fafc;
+}
+
+.app-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 22px;
+  margin-bottom: 18px;
+  border-radius: 20px;
+  background: #172033;
+  color: white;
+}
+
+.app-header h1 {
+  margin: 4px 0 10px;
+  font-size: 2rem;
+}
+
+.app-header p {
+  margin: 4px 0;
+}
+
+.eyebrow {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.turno-badge {
+  height: fit-content;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #d1fae5;
+  color: #065f46;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.primary-button,
+.secondary-button {
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  padding: 15px 18px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primary-button {
+  background: #2563eb;
+  color: white;
+}
+
+.secondary-button {
+  margin-top: 18px;
+  background: white;
+  color: #172033;
+  border: 1px solid #cbd5e1;
+}
+
+.section {
+  margin-top: 24px;
+}
+
+.section h2 {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-title span {
+  min-width: 30px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  text-align: center;
+  font-weight: 700;
+}
+
+.event-list {
+  display: grid;
+  gap: 12px;
+}
+
+.event-card {
+  padding: 16px;
+  border-radius: 16px;
+  background: white;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+}
+
+.event-card__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.event-card h3 {
+  margin: 0 0 5px;
+  font-size: 1.15rem;
+}
+
+.event-card p {
+  margin: 0;
+}
+
+.event-description {
+  margin-top: 14px !important;
+  font-weight: 600;
+}
+
+.event-time {
+  margin-top: 9px !important;
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.status {
+  height: fit-content;
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-red {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-yellow {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.activity-list {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: white;
+}
+
+.activity-list p {
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.activity-list p:last-child {
+  border-bottom: 0;
+}
