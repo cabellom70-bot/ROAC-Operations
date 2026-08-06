@@ -16,7 +16,8 @@ body {
 }
 
 button,
-textarea {
+textarea,
+input {
   font: inherit;
 }
 
@@ -44,9 +45,30 @@ button {
   box-shadow: 0 8px 22px rgba(35, 78, 112, 0.18);
 }
 
+.brand-area {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.roac-logo-placeholder {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  flex: 0 0 52px;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  border-radius: 50%;
+  background: rgba(8, 31, 58, 0.28);
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
 .app-header h1 {
   margin: 4px 0 10px;
-  font-size: 2rem;
+  font-size: 1.75rem;
 }
 
 .app-header p {
@@ -89,10 +111,6 @@ button {
 .primary-button {
   background: #2563eb;
   color: white;
-}
-
-.primary-button:hover {
-  background: #1d4ed8;
 }
 
 .secondary-button {
@@ -141,6 +159,40 @@ button {
   color: #991b1b;
 }
 
+.backup-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 15px;
+  padding: 16px;
+  border: 1px solid #c4b5fd;
+  border-radius: 16px;
+  background: #f5f3ff;
+}
+
+.backup-card h2 {
+  margin: 5px 0 8px;
+  font-size: 1.15rem;
+  color: #5b21b6;
+}
+
+.backup-card p {
+  margin: 4px 0;
+  color: #475569;
+  font-size: 0.88rem;
+}
+
+.backup-button {
+  flex: 0 0 auto;
+  padding: 11px 13px;
+  border: 0;
+  border-radius: 11px;
+  background: #7c3aed;
+  color: white;
+  font-weight: 700;
+}
+
 .section {
   margin-top: 24px;
 }
@@ -179,7 +231,8 @@ button {
 
 .equipment-selector,
 .fault-form,
-.status-screen {
+.status-screen,
+.fault-detail {
   padding: 18px;
   border-radius: 18px;
   background: white;
@@ -220,6 +273,7 @@ button {
   display: grid;
   gap: 5px;
   min-height: 105px;
+  width: 100%;
   padding: 12px 8px;
   border: 2px solid transparent;
   border-left-width: 6px;
@@ -227,10 +281,6 @@ button {
   background: #f1f5f9;
   color: #172033;
   text-align: center;
-}
-
-.home-equipment-card {
-  cursor: default;
 }
 
 .equipment-card strong {
@@ -245,6 +295,10 @@ button {
 .equipment-card small {
   color: #64748b;
   font-weight: 600;
+}
+
+.home-equipment-card {
+  cursor: default;
 }
 
 .home-equipment-status {
@@ -269,6 +323,97 @@ button {
   border-right-color: #2563eb;
   border-bottom-color: #2563eb;
   background: #eff6ff;
+}
+
+.backup-equipment-wrapper,
+.fault-selection-wrapper {
+  position: relative;
+}
+
+.backup-label,
+.open-fault-label {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.backup-label {
+  background: #ede9fe;
+  color: #6d28d9;
+}
+
+.open-fault-label {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.no-backup-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  margin-bottom: 16px;
+  padding: 15px;
+  border: 2px solid #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+  color: #334155;
+  text-align: left;
+  font-weight: 700;
+}
+
+.no-backup-button small {
+  color: #64748b;
+  font-weight: 400;
+}
+
+.no-backup-button-selected {
+  border-color: #7c3aed;
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.backup-grid {
+  margin-top: 10px;
+}
+
+.backup-select-card {
+  display: grid;
+  gap: 5px;
+  min-height: 105px;
+  padding: 12px 8px;
+  border: 2px solid transparent;
+  border-radius: 14px;
+  background: #f1f5f9;
+  color: #172033;
+  text-align: center;
+}
+
+.backup-select-card strong {
+  font-size: 1.35rem;
+}
+
+.backup-select-card span {
+  font-weight: 700;
+}
+
+.backup-select-card small {
+  color: #64748b;
+}
+
+.backup-select-card-selected {
+  border-color: #7c3aed;
+  background: #f5f3ff;
+}
+
+.backup-select-card-disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .selected-equipment {
@@ -339,16 +484,29 @@ button {
   color: #1d4ed8;
 }
 
-textarea {
+textarea,
+.form-input {
   width: 100%;
   padding: 13px;
   border: 1px solid #cbd5e1;
   border-radius: 12px;
-  resize: vertical;
+  background: white;
   color: #172033;
 }
 
-.automatic-data {
+textarea {
+  resize: vertical;
+}
+
+.optional-label {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.automatic-data,
+.status-summary-card,
+.detail-information {
   margin-top: 18px;
   padding: 4px 14px;
   border-radius: 12px;
@@ -356,7 +514,8 @@ textarea {
 }
 
 .automatic-data p,
-.status-summary-card p {
+.status-summary-card p,
+.detail-information p {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -366,7 +525,8 @@ textarea {
 }
 
 .automatic-data p:last-child,
-.status-summary-card p:last-child {
+.status-summary-card p:last-child,
+.detail-information p:last-child {
   border-bottom: 0;
 }
 
@@ -392,6 +552,15 @@ textarea {
   border-radius: 14px;
   background: white;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.07);
+}
+
+.fault-card-button {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  color: inherit;
+  text-align: left;
 }
 
 .fault-card-header {
@@ -428,8 +597,15 @@ textarea {
   font-weight: 700;
 }
 
+.fault-location {
+  margin: 8px 0 0;
+  color: #475569;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .fault-description {
-  margin: 0;
+  margin: 8px 0 0;
   font-weight: 700;
 }
 
@@ -446,20 +622,123 @@ textarea {
   margin-top: 18px;
 }
 
-.status-screen h2 {
-  margin: 6px 0 18px;
+.reset-data-button {
+  width: 100%;
+  margin-top: 22px;
+  padding: 13px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff1f2;
+  color: #b91c1c;
+  font-weight: 700;
 }
 
-.status-summary-card {
-  padding: 4px 14px;
-  border-radius: 14px;
-  background: #f1f5f9;
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
 }
 
-.status-note {
-  margin-top: 18px;
+.detail-header h2 {
+  margin: 5px 0;
+}
+
+.detail-header p {
+  margin: 0;
   color: #64748b;
+}
+
+.fault-state {
+  height: fit-content;
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.fault-state-publicada {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.fault-state-en-atención {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.fault-state-cerrada {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.detail-information span {
+  color: #64748b;
+}
+
+.detail-information strong {
+  text-align: right;
+}
+
+.detail-block {
+  margin-top: 18px;
+  padding: 15px;
+  border-radius: 14px;
+  background: #eff6ff;
+}
+
+.detail-block h3 {
+  margin: 0 0 8px;
+}
+
+.detail-block p {
+  margin: 0;
   line-height: 1.5;
+}
+
+.attention-panel {
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.attention-panel h3 {
+  margin: 0 0 14px;
+}
+
+.attention-panel label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.take-fault-button,
+.close-fault-button {
+  width: 100%;
+  margin-top: 14px;
+  padding: 14px;
+  border: 0;
+  border-radius: 12px;
+  color: white;
+  font-weight: 700;
+}
+
+.take-fault-button {
+  background: #f59e0b;
+}
+
+.close-fault-button {
+  background: #16a34a;
+}
+
+.attention-information {
+  background: #fff7ed;
+}
+
+.completed-work {
+  background: #dcfce7;
 }
 
 .bottom-navigation {
@@ -504,9 +783,33 @@ textarea {
     padding: 14px 10px 100px;
   }
 
+  .app-header {
+    padding: 17px;
+  }
+
+  .app-header h1 {
+    font-size: 1.4rem;
+  }
+
+  .roac-logo-placeholder {
+    width: 44px;
+    height: 44px;
+    flex-basis: 44px;
+  }
+
+  .backup-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .backup-button {
+    width: 100%;
+  }
+
   .equipment-selector,
   .fault-form,
-  .status-screen {
+  .status-screen,
+  .fault-detail {
     padding: 14px;
   }
 
@@ -514,63 +817,18 @@ textarea {
     gap: 7px;
   }
 
-  .equipment-card {
+  .equipment-card,
+  .backup-select-card {
     min-height: 100px;
     padding: 10px 5px;
   }
 
-  .equipment-card strong {
+  .equipment-card strong,
+  .backup-select-card strong {
     font-size: 1.25rem;
   }
 
   .equipment-card span {
     font-size: 0.78rem;
   }
-  .brand-area {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.roac-logo-placeholder {
-  display: grid;
-  place-items: center;
-  width: 52px;
-  height: 52px;
-  flex: 0 0 52px;
-  border: 2px solid rgba(255, 255, 255, 0.7);
-  border-radius: 50%;
-  background: rgba(8, 31, 58, 0.28);
-  color: white;
-  font-size: 0.68rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-}
-
-.form-input {
-  width: 100%;
-  padding: 13px;
-  border: 1px solid #cbd5e1;
-  border-radius: 12px;
-  background: white;
-  color: #172033;
-}
-
-.form-input:focus {
-  border-color: #2563eb;
-  outline: 3px solid rgba(37, 99, 235, 0.13);
-}
-
-.optional-label {
-  color: #64748b;
-  font-size: 0.78rem;
-  font-weight: 400;
-}
-
-.fault-location {
-  margin: 8px 0 0;
-  color: #475569;
-  font-size: 0.9rem;
-  font-weight: 600;
-}
 }

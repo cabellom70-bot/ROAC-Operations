@@ -1,24 +1,10 @@
 import { useState } from "react";
-import type { Equipo, EstadoEquipo } from "../types/Equipo";
 
-export type SistemaAveria =
-  | "Motor"
-  | "Eléctrico"
-  | "Mecánico"
-  | "Hidráulico"
-  | "Dirección"
-  | "Frenos"
-  | "Suspensión"
-  | "Neumáticos"
-  | "Lubricación"
-  | "Cabina"
-  | "Estructural"
-  | "Operacional"
-  | "Otro";
+import type { Equipo } from "../types/Equipo";
+import type { SistemaAveria } from "../types/Averia";
 
 export type DatosNuevaAveria = {
   sistema: SistemaAveria;
-  estadoEquipo: EstadoEquipo;
   ubicacion: string;
   detalleInicial: string;
   informadoPor: string;
@@ -47,12 +33,6 @@ const sistemas: SistemaAveria[] = [
   "Otro",
 ];
 
-const estadosDisponibles: EstadoEquipo[] = [
-  "Fuera de servicio",
-  "En atención",
-  "Operativo",
-];
-
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
     hour: "2-digit",
@@ -70,9 +50,6 @@ function RegistrarAveria({
   const [sistema, setSistema] =
     useState<SistemaAveria>("Motor");
 
-  const [estadoEquipo, setEstadoEquipo] =
-    useState<EstadoEquipo>("Fuera de servicio");
-
   const [ubicacion, setUbicacion] = useState("");
   const [detalleInicial, setDetalleInicial] = useState("");
   const [informadoPor, setInformadoPor] = useState("John");
@@ -85,7 +62,6 @@ function RegistrarAveria({
 
     onPublicar({
       sistema,
-      estadoEquipo,
       ubicacion: ubicacion.trim(),
       detalleInicial: detalleInicial.trim(),
       informadoPor: informadoPor.trim(),
@@ -100,12 +76,10 @@ function RegistrarAveria({
             Publicar avería
           </p>
 
-          <h2>
-            {equipo.numeroMina} ({equipo.numeroInterno})
-          </h2>
+          <h2>{equipo.numeroMina}</h2>
 
           <p className="equipment-model">
-            {equipo.tipo} · {equipo.modelo}
+            Interno {equipo.numeroInterno} · {equipo.modelo}
           </p>
         </div>
 
@@ -127,25 +101,16 @@ function RegistrarAveria({
         ← Cambiar equipo
       </button>
 
-      <div className="form-group">
-        <label>Estado inicial del equipo</label>
+      <div className="automatic-data">
+        <p>
+          <span>Estado inicial</span>
+          <strong>Fuera de servicio</strong>
+        </p>
 
-        <div className="fault-type-grid">
-          {estadosDisponibles.map((estado) => (
-            <button
-              type="button"
-              className={
-                estadoEquipo === estado
-                  ? "fault-type-button fault-type-button-selected"
-                  : "fault-type-button"
-              }
-              key={estado}
-              onClick={() => setEstadoEquipo(estado)}
-            >
-              {estado}
-            </button>
-          ))}
-        </div>
+        <p>
+          <span>Hora del aviso</span>
+          <strong>{obtenerHoraActual()}</strong>
+        </p>
       </div>
 
       <div className="form-group">
@@ -188,7 +153,7 @@ function RegistrarAveria({
 
       <div className="form-group">
         <label htmlFor="detalleInicial">
-          Detalle inicial
+          Descripción
           <span className="optional-label"> Opcional</span>
         </label>
 
@@ -198,7 +163,7 @@ function RegistrarAveria({
           onChange={(evento) =>
             setDetalleInicial(evento.target.value)
           }
-          placeholder="Ejemplo: código motor activo o pérdida de potencia"
+          placeholder="Ejemplo: no desarrolla potencia"
           rows={4}
         />
       </div>
@@ -215,27 +180,7 @@ function RegistrarAveria({
           onChange={(evento) =>
             setInformadoPor(evento.target.value)
           }
-          placeholder="Ejemplo: John"
         />
-      </div>
-
-      <div className="automatic-data">
-        <p>
-          <span>Hora del aviso</span>
-          <strong>{obtenerHoraActual()}</strong>
-        </p>
-
-        <p>
-          <span>Equipo</span>
-          <strong>
-            {equipo.numeroMina} ({equipo.numeroInterno})
-          </strong>
-        </p>
-
-        <p>
-          <span>Modelo</span>
-          <strong>{equipo.modelo}</strong>
-        </p>
       </div>
 
       <button

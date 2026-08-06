@@ -47,7 +47,7 @@ export const equiposIniciales: Equipo[] = [
     tipo: "CAEX",
     marca: "Komatsu",
     modelo: "980E-5",
-    estado: "Fuera de servicio",
+    estado: "Operativo",
   },
   {
     numeroMina: "071",
@@ -63,7 +63,7 @@ export const equiposIniciales: Equipo[] = [
     tipo: "CAEX",
     marca: "Komatsu",
     modelo: "980E-5",
-    estado: "Fuera de servicio",
+    estado: "Operativo",
   },
   {
     numeroMina: "592",
@@ -79,7 +79,7 @@ export const equiposIniciales: Equipo[] = [
     tipo: "Bulldozer",
     marca: "Komatsu",
     modelo: "D475A-5E0",
-    estado: "Fuera de servicio",
+    estado: "Operativo",
   },
   {
     numeroMina: "098",
