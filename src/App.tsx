@@ -1,9 +1,9 @@
+import { supabase } from "./lib/supabase";
 import { useEffect, useState } from "react";
 
 import "./App.css";
 
 import EquipoCard from "./components/EquipoCard";
-import { equiposIniciales } from "./data/equipos";
 import DetalleAveria from "./pages/DetalleAveria";
 import RegistrarAveria, {
   type DatosNuevaAveria,
@@ -11,6 +11,7 @@ import RegistrarAveria, {
 
 import type { Averia } from "./types/Averia";
 import type { Equipo } from "./types/Equipo";
+
 
 type Vista =
   | "inicio"
@@ -21,10 +22,6 @@ type Vista =
   | "detalle-averia"
   | "seleccionar-backup";
 
-const CLAVE_EQUIPOS = "roac-operations-equipos";
-const CLAVE_AVERIAS = "roac-operations-averias";
-const CLAVE_BACKUP = "roac-operations-backup";
-
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
     hour: "2-digit",
@@ -33,59 +30,200 @@ function obtenerHoraActual() {
   });
 }
 
-function cargarEquiposGuardados(): Equipo[] {
-  try {
-    const datos = localStorage.getItem(CLAVE_EQUIPOS);
-    return datos ? (JSON.parse(datos) as Equipo[]) : equiposIniciales;
-  } catch {
-    return equiposIniciales;
-  }
-}
-
-function cargarAveriasGuardadas(): Averia[] {
-  try {
-    const datos = localStorage.getItem(CLAVE_AVERIAS);
-    return datos ? (JSON.parse(datos) as Averia[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function cargarBackupGuardado(): string | null {
-  return localStorage.getItem(CLAVE_BACKUP);
-}
-
 function App() {
   const [vista, setVista] = useState<Vista>("inicio");
-  const [equipos, setEquipos] = useState<Equipo[]>(
-    cargarEquiposGuardados,
-  );
-  const [averias, setAverias] = useState<Averia[]>(
-    cargarAveriasGuardadas,
-  );
+  const [equipos, setEquipos] = useState<Equipo[]>([]);
+  const [averias, setAverias] = useState<Averia[]>([]);
   const [equipoSeleccionado, setEquipoSeleccionado] =
     useState<Equipo | null>(null);
   const [averiaSeleccionadaId, setAveriaSeleccionadaId] =
     useState<number | null>(null);
-  const [numeroBackup, setNumeroBackup] = useState<string | null>(
-    cargarBackupGuardado,
-  );
+  const [numeroBackup, setNumeroBackup] =
+  useState<string | null>(null);
 
-  useEffect(() => {
-    localStorage.setItem(CLAVE_EQUIPOS, JSON.stringify(equipos));
-  }, [equipos]);
+  async function cargarEquipos() {
+    const { data, error } = await supabase
+      .from("equipos")
+      .select("*")
+      .order("numero_mina");
 
-  useEffect(() => {
-    localStorage.setItem(CLAVE_AVERIAS, JSON.stringify(averias));
-  }, [averias]);
-
-  useEffect(() => {
-    if (numeroBackup) {
-      localStorage.setItem(CLAVE_BACKUP, numeroBackup);
-    } else {
-      localStorage.removeItem(CLAVE_BACKUP);
+    if (error) {
+      console.error(error);
+      return;
     }
-  }, [numeroBackup]);
+
+    setEquipos(
+      data.map((e) => ({
+        numeroMina: e.numero_mina,
+        numeroInterno: e.numero_interno,
+        tipo: e.tipo,
+        marca: e.marca,
+        modelo: e.modelo,
+        estado: e.estado,
+      }))
+    );
+  }
+
+
+  async function cargarAverias() {
+    const { data, error } = await supabase
+      .from("averias")
+      .select(`
+        id,
+        sistema,
+        estado_equipo,
+        estado_averia,
+        ubicacion,
+        detalle_inicial,
+        informado_por,
+        tomada_por,
+        trabajo_realizado,
+        fecha_aviso,
+        fecha_atencion,
+        fecha_cierre,
+        equipos (
+          numero_mina,
+          numero_interno,
+          tipo,
+          marca,
+          modelo,
+          estado
+        )
+      `)
+      .order("fecha_aviso", {
+        ascending: false,
+      });
+
+    if (error) {
+      console.error("Error al cargar averías:", error);
+      alert("No se pudieron cargar las averías desde Supabase.");
+      return;
+    }
+
+    const averiasConvertidas: Averia[] = data.map((registro) => {
+      const equipoDb = Array.isArray(registro.equipos)
+        ? registro.equipos[0]
+        : registro.equipos;
+
+      return {
+        id: registro.id,
+        equipo: {
+          numeroMina: equipoDb.numero_mina,
+          numeroInterno: equipoDb.numero_interno,
+          tipo: equipoDb.tipo,
+          marca: equipoDb.marca,
+          modelo: equipoDb.modelo,
+          estado: equipoDb.estado,
+        },
+        sistema: registro.sistema,
+        estadoEquipo: registro.estado_equipo,
+        estadoAveria: registro.estado_averia,
+        ubicacion: registro.ubicacion ?? "",
+        detalleInicial: registro.detalle_inicial ?? "",
+        informadoPor: registro.informado_por,
+        tomadaPor: registro.tomada_por ?? "",
+        trabajoRealizado: registro.trabajo_realizado ?? "",
+        horaAviso: new Date(registro.fecha_aviso).toLocaleTimeString(
+          "es-CL",
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          },
+        ),
+        horaAtencion: registro.fecha_atencion
+          ? new Date(registro.fecha_atencion).toLocaleTimeString(
+              "es-CL",
+              {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              },
+            )
+          : "",
+        horaCierre: registro.fecha_cierre
+          ? new Date(registro.fecha_cierre).toLocaleTimeString(
+              "es-CL",
+              {
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              },
+            )
+          : "",
+      };
+    });
+
+    setAverias(averiasConvertidas);
+  }
+
+
+  async function cargarBackup() {
+    const { data, error } = await supabase
+      .from("configuracion")
+      .select("valor")
+      .eq("clave", "caex_backup")
+      .maybeSingle();
+
+    if (error) {
+      console.error("Error al cargar backup:", error);
+      return;
+    }
+
+    setNumeroBackup(data?.valor ?? null);
+  }
+
+
+  useEffect(() => {
+    void Promise.all([
+      cargarEquipos(),
+      cargarAverias(),
+      cargarBackup(),
+    ]);
+  }, []);
+
+  useEffect(() => {
+    const canal = supabase
+      .channel("roac-operations-realtime")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "averias",
+        },
+        () => {
+          void cargarAverias();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "equipos",
+        },
+        () => {
+          void cargarEquipos();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "configuracion",
+        },
+        () => {
+          void cargarBackup();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(canal);
+    };
+  }, []);
 
   const averiasAbiertas = averias.filter(
     (averia) => averia.estadoAveria !== "Cerrada",
@@ -174,81 +312,175 @@ function App() {
     setEquipoSeleccionado(equipo);
   }
 
-  function publicarAveria(datos: DatosNuevaAveria) {
-    if (!equipoSeleccionado) {
+  async function publicarAveria(datos: DatosNuevaAveria) {
+  if (!equipoSeleccionado) {
+    return;
+  }
+
+  const averiaAbierta = obtenerAveriaAbierta(
+    equipoSeleccionado.numeroMina,
+  );
+
+  if (averiaAbierta) {
+    alert(
+      `El equipo ${equipoSeleccionado.numeroMina} ya tiene una avería abierta.`,
+    );
+
+    setAveriaSeleccionadaId(averiaAbierta.id);
+    setVista("detalle-averia");
+    return;
+  }
+
+  try {
+    // 1. Buscar el ID real del equipo en Supabase
+    const { data: equipoDb, error: errorEquipo } = await supabase
+      .from("equipos")
+      .select("id")
+      .eq("numero_mina", equipoSeleccionado.numeroMina)
+      .single();
+
+    if (errorEquipo || !equipoDb) {
+      console.error(errorEquipo);
+      alert("No se pudo encontrar el equipo en Supabase.");
       return;
     }
 
-    const averiaAbierta = obtenerAveriaAbierta(
-      equipoSeleccionado.numeroMina,
-    );
+    // 2. Crear la avería en Supabase
+    const { data: averiaDb, error: errorAveria } = await supabase
+      .from("averias")
+      .insert({
+        equipo_id: equipoDb.id,
+        sistema: datos.sistema,
+        estado_equipo: "Fuera de servicio",
+        estado_averia: "Publicada",
+        ubicacion: datos.ubicacion,
+        detalle_inicial: datos.detalleInicial,
+        informado_por: datos.informadoPor,
+      })
+      .select("id")
+      .single();
 
-    if (averiaAbierta) {
+    if (errorAveria || !averiaDb) {
+      console.error(errorAveria);
+
+      if (errorAveria?.code === "23505") {
+        alert(
+          `El equipo ${equipoSeleccionado.numeroMina} ya tiene una avería abierta.`,
+        );
+      } else {
+        alert("No se pudo guardar la avería en Supabase.");
+      }
+
+      return;
+    }
+
+    // 3. Cambiar el estado del equipo en Supabase
+    const { error: errorActualizarEquipo } = await supabase
+      .from("equipos")
+      .update({
+        estado: "Fuera de servicio",
+        es_backup: false,
+      })
+      .eq("id", equipoDb.id);
+
+    if (errorActualizarEquipo) {
+      console.error(errorActualizarEquipo);
       alert(
-        `El equipo ${equipoSeleccionado.numeroMina} ya tiene una avería abierta.`,
+        "La avería fue creada, pero no se pudo actualizar el estado del equipo.",
       );
-      setAveriaSeleccionadaId(averiaAbierta.id);
-      setVista("detalle-averia");
       return;
     }
 
-    const equipoActualizado: Equipo = {
-      ...equipoSeleccionado,
-      estado: "Fuera de servicio",
-    };
-
-    const nuevaAveria: Averia = {
-      id: Date.now(),
-      equipo: equipoActualizado,
-      sistema: datos.sistema,
-      estadoEquipo: "Fuera de servicio",
-      estadoAveria: "Publicada",
-      ubicacion: datos.ubicacion,
-      detalleInicial: datos.detalleInicial,
-      informadoPor: datos.informadoPor,
-      horaAviso: obtenerHoraActual(),
-      tomadaPor: "",
-      horaAtencion: "",
-      trabajoRealizado: "",
-      horaCierre: "",
-    };
-
-    setAverias((anteriores) => [nuevaAveria, ...anteriores]);
-
-    setEquipos((anteriores) =>
-      anteriores.map((equipo) =>
-        equipo.numeroMina === equipoSeleccionado.numeroMina
-          ? equipoActualizado
-          : equipo,
-      ),
-    );
-
+    // 4. Si el equipo era backup, eliminar la asignación
     if (numeroBackup === equipoSeleccionado.numeroMina) {
+      const { error: errorBackup } = await supabase
+        .from("configuracion")
+        .update({
+          valor: null,
+        })
+        .eq("clave", "caex_backup");
+
+      if (errorBackup) {
+        console.error(errorBackup);
+      }
+
       setNumeroBackup(null);
+
       alert(
         `El CAEX ${equipoSeleccionado.numeroMina} era el backup y quedó fuera de servicio. Actualmente no hay backup asignado.`,
       );
     }
 
+    // 5. Recargar desde Supabase.
+    // Evitamos agregar la avería manualmente al estado local porque
+    // Realtime también puede recibir el INSERT y provocar un duplicado
+    // por condición de carrera.
+    await Promise.all([
+      cargarAverias(),
+      cargarEquipos(),
+      cargarBackup(),
+    ]);
+
     setEquipoSeleccionado(null);
     setVista("averias");
+  } catch (error) {
+    console.error(error);
+    alert("Ocurrió un error inesperado al publicar la avería.");
   }
+}
 
+    
   function abrirDetalleAveria(id: number) {
     setAveriaSeleccionadaId(id);
     setVista("detalle-averia");
   }
+  async function tomarAveria(responsable: string) {
+  if (averiaSeleccionadaId === null) {
+    return;
+  }
 
-  function tomarAveria(responsable: string) {
-    if (averiaSeleccionadaId === null) {
+  const averiaActual = averias.find(
+    (averia) => averia.id === averiaSeleccionadaId,
+  );
+
+  if (!averiaActual) {
+    return;
+  }
+
+  try {
+    const fechaAtencion = new Date().toISOString();
+
+    const { error: errorAveria } = await supabase
+      .from("averias")
+      .update({
+        estado_averia: "En atención",
+        estado_equipo: "En atención",
+        tomada_por: responsable,
+        fecha_atencion: fechaAtencion,
+      })
+      .eq("id", averiaSeleccionadaId);
+
+    if (errorAveria) {
+      console.error(errorAveria);
+      alert("No se pudo tomar la avería en Supabase.");
       return;
     }
 
-    const averiaActual = averias.find(
-      (averia) => averia.id === averiaSeleccionadaId,
-    );
+    const { error: errorEquipo } = await supabase
+      .from("equipos")
+      .update({
+        estado: "En atención",
+      })
+      .eq(
+        "numero_mina",
+        averiaActual.equipo.numeroMina,
+      );
 
-    if (!averiaActual) {
+    if (errorEquipo) {
+      console.error(errorEquipo);
+      alert(
+        "La avería fue tomada, pero no se pudo actualizar el equipo.",
+      );
       return;
     }
 
@@ -271,22 +503,67 @@ function App() {
     setEquipos((anteriores) =>
       anteriores.map((equipo) =>
         equipo.numeroMina === averiaActual.equipo.numeroMina
-          ? { ...equipo, estado: "En atención" }
+          ? {
+              ...equipo,
+              estado: "En atención",
+            }
           : equipo,
       ),
     );
+  } catch (error) {
+    console.error(error);
+    alert("Ocurrió un error al tomar la avería.");
+  }
+}
+  async function cerrarAveria(
+  trabajoRealizado: string,
+) {
+  if (averiaSeleccionadaId === null) {
+    return;
   }
 
-  function cerrarAveria(trabajoRealizado: string) {
-    if (averiaSeleccionadaId === null) {
+  const averiaActual = averias.find(
+    (averia) => averia.id === averiaSeleccionadaId,
+  );
+
+  if (!averiaActual) {
+    return;
+  }
+
+  try {
+    const fechaCierre = new Date().toISOString();
+
+    const { error: errorAveria } = await supabase
+      .from("averias")
+      .update({
+        estado_averia: "Cerrada",
+        estado_equipo: "Operativo",
+        trabajo_realizado: trabajoRealizado,
+        fecha_cierre: fechaCierre,
+      })
+      .eq("id", averiaSeleccionadaId);
+
+    if (errorAveria) {
+      console.error(errorAveria);
+      alert("No se pudo cerrar la avería en Supabase.");
       return;
     }
 
-    const averiaActual = averias.find(
-      (averia) => averia.id === averiaSeleccionadaId,
-    );
+    const { error: errorEquipo } = await supabase
+      .from("equipos")
+      .update({
+        estado: "Operativo",
+      })
+      .eq(
+        "numero_mina",
+        averiaActual.equipo.numeroMina,
+      );
 
-    if (!averiaActual) {
+    if (errorEquipo) {
+      console.error(errorEquipo);
+      alert(
+        "La avería se cerró, pero no se pudo restaurar el equipo a Operativo.",
+      );
       return;
     }
 
@@ -308,69 +585,117 @@ function App() {
 
     setEquipos((anteriores) =>
       anteriores.map((equipo) =>
-        equipo.numeroMina === averiaActual.equipo.numeroMina
-          ? { ...equipo, estado: "Operativo" }
+        equipo.numeroMina ===
+        averiaActual.equipo.numeroMina
+          ? {
+              ...equipo,
+              estado: "Operativo",
+            }
           : equipo,
       ),
     );
 
     setAveriaSeleccionadaId(null);
     setVista("averias");
+  } catch (error) {
+    console.error(error);
+    alert("Ocurrió un error al cerrar la avería.");
   }
+}
 
-  function asignarBackup(numeroMina: string | null) {
-    if (numeroMina === null) {
-      setNumeroBackup(null);
+  async function asignarBackup(numeroMina: string | null) {
+    if (numeroMina !== null) {
+      const equipo = equipos.find(
+        (item) => item.numeroMina === numeroMina,
+      );
+
+      if (!equipo || equipo.tipo !== "CAEX") {
+        alert("Solo se puede asignar un CAEX como backup.");
+        return;
+      }
+
+      if (equipo.estado !== "Operativo") {
+        alert(
+          `El CAEX ${equipo.numeroMina} no está disponible para backup.`,
+        );
+        return;
+      }
+
+      if (obtenerAveriaAbierta(equipo.numeroMina)) {
+        alert(
+          `El CAEX ${equipo.numeroMina} tiene una avería abierta.`,
+        );
+        return;
+      }
+    }
+
+    try {
+      const { error: errorLimpiarBackup } = await supabase
+        .from("equipos")
+        .update({ es_backup: false })
+        .eq("tipo", "CAEX");
+
+      if (errorLimpiarBackup) {
+        console.error(errorLimpiarBackup);
+        alert("No se pudo limpiar la asignación de backup.");
+        return;
+      }
+
+      if (numeroMina !== null) {
+        const { error: errorAsignarBackup } = await supabase
+          .from("equipos")
+          .update({ es_backup: true })
+          .eq("numero_mina", numeroMina);
+
+        if (errorAsignarBackup) {
+          console.error(errorAsignarBackup);
+          alert("No se pudo asignar el CAEX como backup.");
+          return;
+        }
+      }
+
+      const { error: errorConfiguracion } = await supabase
+        .from("configuracion")
+        .upsert(
+          {
+            clave: "caex_backup",
+            valor: numeroMina,
+          },
+          {
+            onConflict: "clave",
+          },
+        );
+
+      if (errorConfiguracion) {
+        console.error(errorConfiguracion);
+        alert("No se pudo guardar la configuración de backup.");
+        return;
+      }
+
+      await Promise.all([
+        cargarEquipos(),
+        cargarBackup(),
+      ]);
+
       setVista("inicio");
-      return;
+    } catch (error) {
+      console.error(error);
+      alert("Ocurrió un error al asignar el backup.");
     }
-
-    const equipo = equipos.find(
-      (item) => item.numeroMina === numeroMina,
-    );
-
-    if (!equipo || equipo.tipo !== "CAEX") {
-      alert("Solo se puede asignar un CAEX como backup.");
-      return;
-    }
-
-    if (equipo.estado !== "Operativo") {
-      alert(
-        `El CAEX ${equipo.numeroMina} no está disponible para backup.`,
-      );
-      return;
-    }
-
-    if (obtenerAveriaAbierta(equipo.numeroMina)) {
-      alert(
-        `El CAEX ${equipo.numeroMina} tiene una avería abierta.`,
-      );
-      return;
-    }
-
-    setNumeroBackup(equipo.numeroMina);
-    setVista("inicio");
   }
 
-  function restaurarDatosIniciales() {
-    const confirmado = window.confirm(
-      "Se eliminarán todas las averías, el backup seleccionado y la flota volverá a estado operativo. ¿Deseas continuar?",
-    );
-
-    if (!confirmado) {
-      return;
+  async function recargarDatosDesdeSupabase() {
+    try {
+      await Promise.all([
+        cargarEquipos(),
+        cargarAverias(),
+        cargarBackup(),
+      ]);
+      alert("Datos sincronizados con Supabase.");
+    } catch (error) {
+      console.error(error);
+      alert("No se pudieron recargar los datos.");
     }
-
-    localStorage.removeItem(CLAVE_EQUIPOS);
-    localStorage.removeItem(CLAVE_AVERIAS);
-    localStorage.removeItem(CLAVE_BACKUP);
-
-    setEquipos(equiposIniciales);
-    setAverias([]);
-    setNumeroBackup(null);
-    setEquipoSeleccionado(null);
-    setAveriaSeleccionadaId(null);
-    setVista("inicio");
   }
 
   return (
@@ -682,9 +1007,9 @@ function App() {
           <button
             type="button"
             className="reset-data-button"
-            onClick={restaurarDatosIniciales}
+            onClick={recargarDatosDesdeSupabase}
           >
-            Reiniciar datos locales
+            Recargar desde Supabase
           </button>
         </section>
       )}
