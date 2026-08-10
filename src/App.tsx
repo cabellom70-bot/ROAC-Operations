@@ -1,5 +1,7 @@
+
 import { supabase } from "./lib/supabase";
 import { useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
 
 import "./App.css";
 
@@ -22,6 +24,8 @@ type Vista =
   | "detalle-averia"
   | "seleccionar-backup";
 
+type RolUsuario = "operaciones" | "consulta";
+
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
     hour: "2-digit",
@@ -39,7 +43,101 @@ function App() {
   const [averiaSeleccionadaId, setAveriaSeleccionadaId] =
     useState<number | null>(null);
   const [numeroBackup, setNumeroBackup] =
-  useState<string | null>(null);
+    useState<string | null>(null);
+
+  const [sesion, setSesion] = useState<Session | null>(null);
+  const [rol, setRol] = useState<RolUsuario | null>(null);
+  const [cargandoSesion, setCargandoSesion] = useState(true);
+
+  const [usuarioLogin, setUsuarioLogin] = useState("");
+  const [passwordLogin, setPasswordLogin] = useState("");
+  const [errorLogin, setErrorLogin] = useState("");
+  const [iniciandoSesion, setIniciandoSesion] = useState(false);
+
+  const puedeModificar = rol === "operaciones";
+
+  async function cargarPerfil(userId: string) {
+    const { data, error } = await supabase
+      .from("perfiles")
+      .select("rol")
+      .eq("id", userId)
+      .single();
+
+    if (error) {
+      console.error("Error al cargar perfil:", error);
+      setRol(null);
+      return;
+    }
+
+    if (data?.rol === "operaciones" || data?.rol === "consulta") {
+      setRol(data.rol);
+    } else {
+      setRol(null);
+    }
+  }
+
+  async function iniciarSesion() {
+    const usuario = usuarioLogin.trim().toLowerCase();
+
+    if (!usuario || !passwordLogin) {
+      setErrorLogin("Ingresa usuario y contraseña.");
+      return;
+    }
+
+    // Permitimos escribir solo "operaciones" o "consulta"
+    // aunque Supabase internamente use el correo @roac.local.
+    const email = usuario.includes("@")
+      ? usuario
+      : `${usuario}@roac.local`;
+
+    try {
+      setIniciandoSesion(true);
+      setErrorLogin("");
+
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: passwordLogin,
+      });
+
+      if (error || !data.session) {
+        console.error("Error de inicio de sesión:", error);
+        setErrorLogin("Usuario o contraseña incorrectos.");
+        return;
+      }
+
+      setSesion(data.session);
+      await cargarPerfil(data.session.user.id);
+      setPasswordLogin("");
+      setVista("inicio");
+    } catch (error) {
+      console.error(error);
+      setErrorLogin("No se pudo iniciar sesión.");
+    } finally {
+      setIniciandoSesion(false);
+    }
+  }
+
+  async function cerrarSesionUsuario() {
+    await supabase.auth.signOut();
+
+    setSesion(null);
+    setRol(null);
+    setEquipos([]);
+    setAverias([]);
+    setNumeroBackup(null);
+    setEquipoSeleccionado(null);
+    setAveriaSeleccionadaId(null);
+    setVista("inicio");
+  }
+
+  function exigirPermiso() {
+    if (puedeModificar) {
+      return true;
+    }
+
+    alert("Este acceso es de solo lectura.");
+    return false;
+  }
 
   async function cargarEquipos() {
     const { data, error } = await supabase
@@ -175,14 +273,70 @@ function App() {
 
 
   useEffect(() => {
+    let activo = true;
+
+    async function cargarSesionInicial() {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!activo) {
+        return;
+      }
+
+      if (error) {
+        console.error("Error al recuperar sesión:", error);
+      }
+
+      const session = data.session ?? null;
+      setSesion(session);
+
+      if (session) {
+        await cargarPerfil(session.user.id);
+      } else {
+        setRol(null);
+      }
+
+      if (activo) {
+        setCargandoSesion(false);
+      }
+    }
+
+    void cargarSesionInicial();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSesion(session);
+
+      if (session) {
+        void cargarPerfil(session.user.id);
+      } else {
+        setRol(null);
+      }
+    });
+
+    return () => {
+      activo = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sesion || !rol) {
+      return;
+    }
+
     void Promise.all([
       cargarEquipos(),
       cargarAverias(),
       cargarBackup(),
     ]);
-  }, []);
+  }, [sesion?.user.id, rol]);
 
   useEffect(() => {
+    if (!sesion || !rol) {
+      return;
+    }
+
     const canal = supabase
       .channel("roac-operations-realtime")
       .on(
@@ -223,7 +377,7 @@ function App() {
     return () => {
       void supabase.removeChannel(canal);
     };
-  }, []);
+  }, [sesion?.user.id, rol]);
 
   const averiasAbiertas = averias.filter(
     (averia) => averia.estadoAveria !== "Cerrada",
@@ -268,6 +422,10 @@ function App() {
   }
 
   function comenzarRegistro() {
+    if (!exigirPermiso()) {
+      return;
+    }
+
     setEquipoSeleccionado(null);
     setVista("seleccionar-equipo");
   }
@@ -313,6 +471,10 @@ function App() {
   }
 
   async function publicarAveria(datos: DatosNuevaAveria) {
+  if (!exigirPermiso()) {
+    return;
+  }
+
   if (!equipoSeleccionado) {
     return;
   }
@@ -435,6 +597,10 @@ function App() {
     setVista("detalle-averia");
   }
   async function tomarAveria(responsable: string) {
+  if (!exigirPermiso()) {
+    return;
+  }
+
   if (averiaSeleccionadaId === null) {
     return;
   }
@@ -518,6 +684,10 @@ function App() {
   async function cerrarAveria(
   trabajoRealizado: string,
 ) {
+  if (!exigirPermiso()) {
+    return;
+  }
+
   if (averiaSeleccionadaId === null) {
     return;
   }
@@ -604,6 +774,10 @@ function App() {
 }
 
   async function asignarBackup(numeroMina: string | null) {
+    if (!exigirPermiso()) {
+      return;
+    }
+
     if (numeroMina !== null) {
       const equipo = equipos.find(
         (item) => item.numeroMina === numeroMina,
@@ -698,8 +872,341 @@ function App() {
     }
   }
 
+  if (cargandoSesion) {
+    return (
+      <main className="auth-screen">
+        <style>{`
+          .auth-screen {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: #edf3f9;
+            font-family: inherit;
+          }
+
+          .auth-card {
+            width: min(420px, 100%);
+            background: #ffffff;
+            border-radius: 28px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(15, 34, 58, 0.14);
+          }
+
+          .auth-brand {
+            text-align: center;
+          }
+
+          .auth-logo {
+            width: 74px;
+            height: 74px;
+            margin: 0 auto 14px;
+            border: 2px solid #4b86b0;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #315f82;
+          }
+
+          .auth-brand h1 {
+            margin: 0;
+            font-size: 30px;
+          }
+
+          .auth-brand p {
+            margin: 8px 0 0;
+            color: #607086;
+          }
+        `}</style>
+
+        <section className="auth-card">
+          <div className="auth-brand">
+            <div className="auth-logo">ROAC</div>
+            <h1>ROAC Operations</h1>
+            <p>Iniciando sistema...</p>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!sesion) {
+    return (
+      <main className="auth-screen">
+        <style>{`
+          .auth-screen {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: #edf3f9;
+            font-family: inherit;
+          }
+
+          .auth-card {
+            width: min(420px, 100%);
+            background: #ffffff;
+            border-radius: 28px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(15, 34, 58, 0.14);
+          }
+
+          .auth-brand {
+            text-align: center;
+            margin-bottom: 26px;
+          }
+
+          .auth-logo {
+            width: 74px;
+            height: 74px;
+            margin: 0 auto 14px;
+            border: 2px solid #4b86b0;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: #315f82;
+          }
+
+          .auth-brand h1 {
+            margin: 0;
+            font-size: 30px;
+          }
+
+          .auth-brand p {
+            margin: 8px 0 0;
+            color: #607086;
+          }
+
+          .auth-form {
+            display: grid;
+            gap: 14px;
+          }
+
+          .auth-form label {
+            display: grid;
+            gap: 7px;
+            font-weight: 700;
+            color: #26384e;
+          }
+
+          .auth-form input {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #cad6e2;
+            border-radius: 14px;
+            padding: 14px 15px;
+            font: inherit;
+            outline: none;
+          }
+
+          .auth-form input:focus {
+            border-color: #3478f6;
+            box-shadow: 0 0 0 3px rgba(52, 120, 246, 0.12);
+          }
+
+          .auth-submit {
+            border: 0;
+            border-radius: 14px;
+            padding: 14px 18px;
+            background: #2463eb;
+            color: #ffffff;
+            font: inherit;
+            font-weight: 800;
+            cursor: pointer;
+          }
+
+          .auth-submit:disabled {
+            opacity: 0.6;
+            cursor: wait;
+          }
+
+          .auth-error {
+            margin: 0;
+            padding: 10px 12px;
+            border-radius: 12px;
+            background: #fff0ee;
+            color: #b42318;
+            font-size: 14px;
+          }
+
+          .auth-help {
+            margin: 16px 0 0;
+            text-align: center;
+            color: #718096;
+            font-size: 13px;
+          }
+        `}</style>
+
+        <section className="auth-card">
+          <div className="auth-brand">
+            <div className="auth-logo">ROAC</div>
+            <h1>ROAC Operations</h1>
+            <p>Acceso al sistema operacional</p>
+          </div>
+
+          <form
+            className="auth-form"
+            onSubmit={(evento) => {
+              evento.preventDefault();
+              void iniciarSesion();
+            }}
+          >
+            <label>
+              Usuario
+              <input
+                autoComplete="username"
+                value={usuarioLogin}
+                onChange={(evento) =>
+                  setUsuarioLogin(evento.target.value)
+                }
+                placeholder="operaciones o consulta"
+              />
+            </label>
+
+            <label>
+              Contraseña
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={passwordLogin}
+                onChange={(evento) =>
+                  setPasswordLogin(evento.target.value)
+                }
+                placeholder="••••••••"
+              />
+            </label>
+
+            {errorLogin && (
+              <p className="auth-error">{errorLogin}</p>
+            )}
+
+            <button
+              type="submit"
+              className="auth-submit"
+              disabled={iniciandoSesion}
+            >
+              {iniciandoSesion
+                ? "Ingresando..."
+                : "Iniciar sesión"}
+            </button>
+          </form>
+
+          <p className="auth-help">
+            Acceso restringido · ROAC Operations
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!rol) {
+    return (
+      <main className="auth-screen">
+        <style>{`
+          .auth-screen {
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+            background: #edf3f9;
+          }
+
+          .auth-card {
+            width: min(420px, 100%);
+            background: #ffffff;
+            border-radius: 28px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(15, 34, 58, 0.14);
+          }
+
+          .auth-submit {
+            border: 0;
+            border-radius: 14px;
+            padding: 14px 18px;
+            background: #2463eb;
+            color: #ffffff;
+            font: inherit;
+            font-weight: 800;
+            cursor: pointer;
+          }
+        `}</style>
+
+        <section className="auth-card">
+          <h1>Acceso sin perfil</h1>
+          <p>
+            La cuenta autenticada no tiene un rol válido en
+            ROAC Operations.
+          </p>
+
+          <button
+            type="button"
+            className="auth-submit"
+            onClick={() => void cerrarSesionUsuario()}
+          >
+            Cerrar sesión
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
-    <main className="app">
+    <main
+      className={`app ${!puedeModificar ? "read-only-mode" : ""}`}
+    >
+      <style>{`
+        .session-tools {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 7px;
+          margin-left: auto;
+        }
+
+        .access-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          padding: 7px 11px;
+          font-size: 12px;
+          font-weight: 800;
+          background: rgba(255, 255, 255, 0.82);
+          color: #20445f;
+        }
+
+        .logout-button {
+          border: 1px solid rgba(255, 255, 255, 0.75);
+          border-radius: 999px;
+          padding: 6px 10px;
+          background: transparent;
+          color: #ffffff;
+          font: inherit;
+          font-size: 12px;
+          cursor: pointer;
+        }
+
+        .read-only-notice {
+          margin: 14px 0;
+          padding: 11px 14px;
+          border: 1px solid #bdd4ea;
+          border-radius: 14px;
+          background: #eef7ff;
+          color: #315f82;
+          font-size: 13px;
+          font-weight: 700;
+          text-align: center;
+        }
+
+        .read-only-mode .attention-panel {
+          display: none !important;
+        }
+      `}</style>
       <header className="app-header">
         <div className="brand-area">
           <div className="roac-logo-placeholder">ROAC</div>
@@ -708,12 +1215,35 @@ function App() {
             <p className="eyebrow">Turno actual</p>
             <h1>ROAC Operations</h1>
             <p>Noche · 20:00 a 08:00</p>
-            <p>Responsable: Michael</p>
+            <p>
+              Acceso: {puedeModificar ? "Operaciones" : "Solo lectura"}
+            </p>
           </div>
         </div>
 
-        <span className="shift-badge">Activo</span>
+        <div className="session-tools">
+          <span className="shift-badge">Activo</span>
+
+          <span className="access-badge">
+            {puedeModificar ? "OPERACIONES" : "SOLO LECTURA"}
+          </span>
+
+          <button
+            type="button"
+            className="logout-button"
+            onClick={() => void cerrarSesionUsuario()}
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </header>
+
+      {!puedeModificar && (
+        <div className="read-only-notice">
+          Modo solo lectura · Puedes consultar el estado de la flota
+          y las averías, sin modificar datos.
+        </div>
+      )}
 
       {vista === "inicio" && (
         <>
@@ -759,22 +1289,26 @@ function App() {
               )}
             </div>
 
-            <button
-              type="button"
-              className="backup-button"
-              onClick={() => setVista("seleccionar-backup")}
-            >
-              {equipoBackup ? "Cambiar backup" : "Asignar backup"}
-            </button>
+            {puedeModificar && (
+              <button
+                type="button"
+                className="backup-button"
+                onClick={() => setVista("seleccionar-backup")}
+              >
+                {equipoBackup ? "Cambiar backup" : "Asignar backup"}
+              </button>
+            )}
           </section>
 
-          <button
-            type="button"
-            className="primary-button"
-            onClick={comenzarRegistro}
-          >
-            + Publicar avería
-          </button>
+          {puedeModificar && (
+            <button
+              type="button"
+              className="primary-button"
+              onClick={comenzarRegistro}
+            >
+              + Publicar avería
+            </button>
+          )}
 
           <section className="section">
             <div className="section-title">
@@ -810,7 +1344,7 @@ function App() {
         </>
       )}
 
-      {vista === "seleccionar-backup" && (
+      {vista === "seleccionar-backup" && puedeModificar && (
         <section className="equipment-selector">
           <div className="form-header">
             <div>
@@ -947,13 +1481,15 @@ function App() {
             </div>
           )}
 
-          <button
-            type="button"
-            className="primary-button fault-register-button"
-            onClick={comenzarRegistro}
-          >
-            + Publicar otra avería
-          </button>
+          {puedeModificar && (
+            <button
+              type="button"
+              className="primary-button fault-register-button"
+              onClick={comenzarRegistro}
+            >
+              + Publicar otra avería
+            </button>
+          )}
         </section>
       )}
 
@@ -1014,7 +1550,7 @@ function App() {
         </section>
       )}
 
-      {vista === "seleccionar-equipo" && (
+      {vista === "seleccionar-equipo" && puedeModificar && (
         <section className="equipment-selector">
           <div className="form-header">
             <div>
@@ -1104,6 +1640,7 @@ function App() {
       )}
 
       {vista === "registrar-averia" &&
+        puedeModificar &&
         equipoSeleccionado && (
           <RegistrarAveria
             equipo={equipoSeleccionado}
