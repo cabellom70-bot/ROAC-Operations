@@ -1,4 +1,3 @@
-
 import { supabase } from "./lib/supabase";
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
@@ -25,6 +24,111 @@ type Vista =
   | "seleccionar-backup";
 
 type RolUsuario = "operaciones" | "consulta";
+
+type TipoTurno = "Día" | "Noche";
+
+type TurnoActual = {
+  tipo: TipoTurno;
+  horario: string;
+  fechaOperacional: string;
+  fechaLarga: string;
+};
+
+const ZONA_HORARIA_OPERACIONAL = "America/Santiago";
+
+function obtenerPartesChile(fecha: Date) {
+  const partes = new Intl.DateTimeFormat("en-CA", {
+    timeZone: ZONA_HORARIA_OPERACIONAL,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(fecha);
+
+  const valores = Object.fromEntries(
+    partes
+      .filter((parte) => parte.type !== "literal")
+      .map((parte) => [parte.type, parte.value]),
+  );
+
+  return {
+    year: Number(valores.year),
+    month: Number(valores.month),
+    day: Number(valores.day),
+    hour: Number(valores.hour),
+    minute: Number(valores.minute),
+  };
+}
+
+function formatearFechaOperacional(
+  year: number,
+  month: number,
+  day: number,
+) {
+  return `${String(day).padStart(2, "0")}/${String(month).padStart(
+    2,
+    "0",
+  )}/${year}`;
+}
+
+function formatearFechaLarga(
+  year: number,
+  month: number,
+  day: number,
+) {
+  const fechaUtc = new Date(Date.UTC(year, month - 1, day));
+
+  return new Intl.DateTimeFormat("es-CL", {
+    timeZone: "UTC",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(fechaUtc);
+}
+
+function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
+  const partes = obtenerPartesChile(fecha);
+  const minutos = partes.hour * 60 + partes.minute;
+
+  // Según operación:
+  // 08:01 a 20:00 = Día
+  // 20:01 a 08:00 = Noche
+  const esTurnoDia = minutos >= 8 * 60 + 1 && minutos <= 20 * 60;
+
+  let yearOperacional = partes.year;
+  let monthOperacional = partes.month;
+  let dayOperacional = partes.day;
+
+  // Entre 00:00 y 08:00 seguimos perteneciendo al turno noche
+  // que comenzó el día anterior.
+  if (!esTurnoDia && minutos <= 8 * 60) {
+    const fechaBase = new Date(
+      Date.UTC(partes.year, partes.month - 1, partes.day),
+    );
+    fechaBase.setUTCDate(fechaBase.getUTCDate() - 1);
+
+    yearOperacional = fechaBase.getUTCFullYear();
+    monthOperacional = fechaBase.getUTCMonth() + 1;
+    dayOperacional = fechaBase.getUTCDate();
+  }
+
+  return {
+    tipo: esTurnoDia ? "Día" : "Noche",
+    horario: esTurnoDia ? "08:01 a 20:00" : "20:01 a 08:00",
+    fechaOperacional: formatearFechaOperacional(
+      yearOperacional,
+      monthOperacional,
+      dayOperacional,
+    ),
+    fechaLarga: formatearFechaLarga(
+      yearOperacional,
+      monthOperacional,
+      dayOperacional,
+    ),
+  };
+}
 
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
@@ -55,6 +159,9 @@ function App() {
   const [iniciandoSesion, setIniciandoSesion] = useState(false);
 
   const puedeModificar = rol === "operaciones";
+  const [turnoActual, setTurnoActual] = useState<TurnoActual>(
+    () => obtenerTurnoActual(),
+  );
 
   async function cargarPerfil(userId: string) {
     const { data, error } = await supabase
@@ -271,6 +378,22 @@ function App() {
     setNumeroBackup(data?.valor ?? null);
   }
 
+
+  useEffect(() => {
+    function actualizarTurno() {
+      setTurnoActual(obtenerTurnoActual());
+    }
+
+    actualizarTurno();
+
+    // Actualización frecuente para que el cambio 08:01 / 20:01
+    // ocurra sin recargar la página.
+    const intervalo = window.setInterval(actualizarTurno, 30_000);
+
+    return () => {
+      window.clearInterval(intervalo);
+    };
+  }, []);
 
   useEffect(() => {
     let activo = true;
@@ -1160,35 +1283,442 @@ function App() {
       className={`app ${!puedeModificar ? "read-only-mode" : ""}`}
     >
       <style>{`
-        .session-tools {
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-          gap: 7px;
-          margin-left: auto;
+        .app-header {
+          position: relative;
+          overflow: hidden;
+          display: grid;
+          grid-template-columns: 1.08fr 1fr 1.08fr;
+          min-height: 215px;
+          padding: 0;
+          border-radius: 22px;
+          background:
+            radial-gradient(circle at 18% 38%, rgba(12, 93, 160, 0.14), transparent 30%),
+            linear-gradient(135deg, #021426 0%, #05223c 52%, #021426 100%);
+          border: 1px solid rgba(28, 160, 255, 0.72);
+          box-shadow:
+            0 14px 34px rgba(0, 21, 43, 0.28),
+            inset 0 0 42px rgba(14, 100, 169, 0.05);
+          color: #ffffff;
         }
 
-        .access-badge {
+        .app-header::before {
+          content: "";
+          position: absolute;
+          inset: 0;
+          pointer-events: none;
+          opacity: 0.18;
+          background-image:
+            radial-gradient(circle at 18% 42%, transparent 0 18%, rgba(32, 148, 226, 0.10) 18.3% 18.8%, transparent 19% 100%),
+            radial-gradient(circle at 18% 42%, transparent 0 27%, rgba(32, 148, 226, 0.08) 27.3% 27.8%, transparent 28% 100%);
+        }
+
+        .header-brand-panel,
+        .header-shift-panel,
+        .header-access-panel {
+          position: relative;
+          z-index: 1;
+          min-width: 0;
+          padding: 22px 18px;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+        }
+
+        .header-brand-panel,
+        .header-shift-panel {
+          border-right: 1px solid rgba(51, 155, 225, 0.28);
+        }
+
+        /* ───── IZQUIERDA: ROAC ───── */
+
+        .header-brand-panel {
+          align-items: flex-start;
+        }
+
+        .header-roac-logo {
+          display: block;
+          width: min(108px, 52%);
+          height: auto;
+          object-fit: contain;
+
+          /* Integra el fondo negro original del PNG con el header */
+          mix-blend-mode: screen;
+          filter:
+            saturate(1.08)
+            contrast(1.03)
+            drop-shadow(0 7px 14px rgba(0, 0, 0, 0.22));
+        }
+
+        .header-operations-label {
+          margin-top: 3px;
+          color: #ffc400;
+          font-size: clamp(11px, 2.1vw, 16px);
+          line-height: 1;
+          font-weight: 900;
+          letter-spacing: clamp(1.5px, 0.35vw, 3px);
+        }
+
+        .header-system-label {
+          margin: 13px 0 0;
+          max-width: 200px;
+          color: #a7b9ca;
+          font-size: clamp(7px, 1.25vw, 10px);
+          line-height: 1.35;
+          font-weight: 700;
+          letter-spacing: 0.55px;
+          text-transform: uppercase;
+        }
+
+        /* ───── CENTRO: TURNO ───── */
+
+        .header-shift-panel {
+          align-items: flex-start;
+          padding-left: clamp(18px, 4vw, 36px);
+        }
+
+        .header-section-label {
+          margin: 0 0 8px;
+          color: #22a8ff;
+          font-size: clamp(8px, 1.45vw, 11px);
+          font-weight: 900;
+          letter-spacing: 0.95px;
+          text-transform: uppercase;
+        }
+
+        .header-shift-title {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin: 0 0 14px;
+          color: #ffffff;
+          font-size: clamp(30px, 5.2vw, 46px);
+          line-height: 0.95;
+          font-weight: 900;
+          letter-spacing: -0.7px;
+        }
+
+        .header-shift-icon {
           display: inline-flex;
           align-items: center;
           justify-content: center;
+          font-size: 0.72em;
+          line-height: 1;
+        }
+
+        .header-time-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          width: fit-content;
+          padding: 9px 12px;
+          margin-bottom: 15px;
+          border: 1px solid rgba(25, 156, 255, 0.78);
+          border-radius: 12px;
+          background: rgba(0, 14, 30, 0.58);
+          box-shadow: inset 0 0 14px rgba(0, 102, 186, 0.08);
+          color: #ffffff;
+          font-size: clamp(11px, 2vw, 15px);
+          font-weight: 850;
+          white-space: nowrap;
+        }
+
+        .header-time-icon {
+          color: #20a9ff;
+          font-size: 1.15em;
+        }
+
+        .header-date {
+          margin: 0;
+          color: #18a7ff;
+          font-size: clamp(9px, 1.75vw, 13px);
+          line-height: 1.2;
+          font-weight: 850;
+          text-transform: capitalize;
+        }
+
+        .header-date-caption {
+          margin: 4px 0 0;
+          color: #9eb0c2;
+          font-size: clamp(7px, 1.25vw, 10px);
+        }
+
+        /* ───── DERECHA: EPSA + ACCESO ───── */
+
+        .header-access-panel {
+          align-items: flex-end;
+          gap: 9px;
+        }
+
+        .header-epsa-brand {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-bottom: 2px;
+        }
+
+        .header-epsa-logo {
+          display: block;
+          width: clamp(42px, 8vw, 65px);
+          height: auto;
+          object-fit: contain;
+
+          /* El blanco del PNG se funde con el fondo del header */
+          mix-blend-mode: multiply;
+          filter:
+            saturate(1.45)
+            brightness(1.42)
+            contrast(1.15);
+        }
+
+        .header-epsa-copy {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          line-height: 1;
+        }
+
+        .header-epsa-name {
+          color: #ffffff;
+          font-size: clamp(22px, 4.6vw, 38px);
+          line-height: 0.92;
+          font-weight: 950;
+          letter-spacing: -0.8px;
+        }
+
+        .header-epsa-subtitle {
+          margin-top: 6px;
+          color: #159eff;
+          font-size: clamp(7px, 1.45vw, 11px);
+          font-weight: 900;
+          letter-spacing: clamp(1.6px, 0.45vw, 3.2px);
+        }
+
+        .shift-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 6px 11px;
           border-radius: 999px;
-          padding: 7px 11px;
-          font-size: 12px;
+          background: rgba(0, 178, 99, 0.10);
+          border: 1px solid rgba(0, 226, 129, 0.34);
+          color: #28e78a;
+          font-size: clamp(8px, 1.45vw, 10px);
+          font-weight: 900;
+        }
+
+        .shift-badge::before {
+          content: "";
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #19e77f;
+          box-shadow: 0 0 9px rgba(25, 231, 127, 0.78);
+        }
+
+        .access-badge {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          width: min(175px, 100%);
+          box-sizing: border-box;
+          padding: 10px 13px;
+          border: 1px solid rgba(25, 156, 255, 0.60);
+          border-radius: 13px;
+          background: rgba(0, 15, 31, 0.54);
+          box-shadow: inset 0 0 20px rgba(0, 91, 160, 0.05);
+        }
+
+        .access-badge-label {
+          color: #96a9bc;
+          font-size: clamp(6px, 1.15vw, 8px);
           font-weight: 800;
-          background: rgba(255, 255, 255, 0.82);
-          color: #20445f;
+          letter-spacing: 0.65px;
+          text-transform: uppercase;
+        }
+
+        .access-badge-value {
+          margin-top: 4px;
+          color: #1ca6ff;
+          font-size: clamp(10px, 1.9vw, 14px);
+          line-height: 1.1;
+          font-weight: 950;
+          white-space: nowrap;
         }
 
         .logout-button {
-          border: 1px solid rgba(255, 255, 255, 0.75);
+          padding: 7px 12px;
+          border: 1px solid rgba(25, 156, 255, 0.68);
           border-radius: 999px;
-          padding: 6px 10px;
-          background: transparent;
-          color: #ffffff;
+          background: rgba(0, 13, 28, 0.34);
+          color: #41b7ff;
           font: inherit;
-          font-size: 12px;
+          font-size: clamp(7px, 1.25vw, 9px);
+          font-weight: 850;
           cursor: pointer;
+          transition:
+            background 160ms ease,
+            transform 160ms ease,
+            border-color 160ms ease;
+        }
+
+        .logout-button:hover {
+          transform: translateY(-1px);
+          background: rgba(22, 153, 244, 0.11);
+          border-color: rgba(45, 177, 255, 0.85);
+        }
+
+        /* ───── RESPONSIVE PARA TELÉFONO ───── */
+        @media (max-width: 900px) {
+          .app-header {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-areas:
+              "brand epsa"
+              "shift shift"
+              "access access";
+            min-height: 0;
+            padding: 16px 16px 14px;
+            gap: 0;
+            border-radius: 20px;
+          }
+
+          .header-brand-panel,
+          .header-shift-panel,
+          .header-access-panel {
+            padding: 0;
+            border: 0;
+          }
+
+          .header-brand-panel {
+            grid-area: brand;
+            align-items: flex-start;
+            justify-content: flex-start;
+            min-height: 92px;
+          }
+
+          .header-roac-logo {
+            width: 74px;
+            max-width: 74px;
+            height: auto;
+          }
+
+          .header-operations-label {
+            margin-top: 2px;
+            font-size: 10px;
+            letter-spacing: 1.8px;
+          }
+
+          .header-system-label {
+            margin-top: 8px;
+            max-width: 145px;
+            font-size: 6px;
+            line-height: 1.35;
+            letter-spacing: .4px;
+          }
+
+          .header-shift-panel {
+            grid-area: shift;
+            position: relative;
+            align-items: center;
+            text-align: center;
+            margin-top: 5px;
+            padding: 13px 0 12px;
+            border-top: 1px solid rgba(51, 155, 225, .22);
+            border-bottom: 1px solid rgba(51, 155, 225, .22);
+          }
+
+          .header-section-label {
+            margin: 0 0 5px;
+            font-size: 8px;
+            letter-spacing: 1.1px;
+          }
+
+          .header-shift-title {
+            justify-content: center;
+            margin: 0 0 9px;
+            gap: 8px;
+            font-size: 31px;
+            line-height: 1;
+          }
+
+          .header-time-chip {
+            margin: 0 auto 9px;
+            padding: 7px 13px;
+            font-size: 11px;
+            border-radius: 10px;
+          }
+
+          .header-date {
+            font-size: 9px;
+          }
+
+          .header-date-caption {
+            font-size: 6px;
+          }
+
+          .header-access-panel {
+            grid-area: access;
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            align-items: center;
+            gap: 8px;
+            padding-top: 12px;
+          }
+
+          .header-epsa-brand {
+            grid-area: epsa;
+            position: absolute;
+            top: 17px;
+            right: 17px;
+            width: auto;
+            margin: 0;
+            gap: 6px;
+          }
+
+          .header-epsa-logo {
+            width: 38px;
+            height: 38px;
+          }
+
+          .header-epsa-name {
+            font-size: 23px;
+          }
+
+          .header-epsa-subtitle {
+            margin-top: 4px;
+            font-size: 6px;
+            letter-spacing: 1.8px;
+          }
+
+          .shift-badge {
+            justify-self: start;
+            padding: 5px 9px;
+            font-size: 7px;
+          }
+
+          .access-badge {
+            justify-self: center;
+            width: auto;
+            min-width: 118px;
+            padding: 7px 10px;
+            border-radius: 10px;
+          }
+
+          .access-badge-label {
+            font-size: 5.5px;
+          }
+
+          .access-badge-value {
+            font-size: 8px;
+          }
+
+          .logout-button {
+            justify-self: end;
+            padding: 6px 9px;
+            font-size: 6.5px;
+          }
         }
 
         .read-only-notice {
@@ -1202,40 +1732,320 @@ function App() {
           font-weight: 700;
           text-align: center;
         }
+/* ======================================================
+   ROAC OPERATIONS - CABECERA CON FONDO FIJO
+   Ajuste final visual según referencia aprobada
+   ====================================================== */
+
+.roac-header-background {
+  position: relative !important;
+
+  /* Un poco más ancha que el contenido para dar aire a ROAC/EPSA */
+  width: calc(100% + 18px) !important;
+  max-width: none !important;
+  left: -9px;
+
+  /* Más baja y panorámica */
+  aspect-ratio: 2.34 / 1 !important;
+
+  min-height: 0 !important;
+  height: auto !important;
+
+  display: block !important;
+
+  padding: 0 !important;
+  margin: 0 0 18px !important;
+
+  background-image: url("/roac-header-bg.png") !important;
+
+  /* Usamos el fondo completo para no cortar ROAC ni EPSA */
+  background-size: 100% 100% !important;
+  background-position: center center !important;
+  background-repeat: no-repeat !important;
+
+  border: none !important;
+  border-radius: 20px !important;
+
+  overflow: hidden !important;
+
+  container-type: inline-size;
+
+  box-shadow:
+    0 8px 24px rgba(7, 35, 63, 0.14);
+}
+
+
+/* ======================================================
+   TURNO DÍA / NOCHE
+   ====================================================== */
+
+.header-overlay-shift {
+  position: absolute;
+
+  left: 31.1%;
+  top: 23.0%;
+
+  width: 31.0%;
+  height: 13.0%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.0cqw;
+
+  color: #ffffff;
+
+  font-size: 3.85cqw;
+  font-weight: 850;
+  line-height: 1;
+
+  text-align: center;
+  white-space: nowrap;
+}
+
+.header-overlay-shift-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  font-size: 0.70em;
+  line-height: 1;
+}
+
+
+/* ======================================================
+   HORARIO
+   ====================================================== */
+
+.header-overlay-time {
+  position: absolute;
+
+  left: 32.1%;
+  top: 44.3%;
+
+  width: 29.8%;
+  height: 8.8%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: #ffffff;
+
+  font-size: 2.35cqw;
+  font-weight: 800;
+  line-height: 1;
+
+  text-align: center;
+  white-space: nowrap;
+}
+
+
+/* ======================================================
+   FECHA OPERACIONAL
+   ====================================================== */
+
+.header-overlay-date {
+  position: absolute;
+
+  left: 36.0%;
+  top: 67.0%;
+
+  width: 25.0%;
+  height: 8.5%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: #19a9ff;
+
+  font-size: 1.78cqw;
+  font-weight: 800;
+  line-height: 1;
+
+  text-align: center;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+
+/* ======================================================
+   ESTADO ACTIVO
+   ====================================================== */
+
+.header-overlay-active {
+  position: absolute;
+
+  left: 72.4%;
+  top: 39.8%;
+
+  width: 16.0%;
+  height: 8.8%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: #25ef98;
+
+  font-size: 1.78cqw;
+  font-weight: 800;
+  line-height: 1;
+
+  text-align: center;
+  white-space: nowrap;
+}
+
+.header-active-dot {
+  display: none !important;
+}
+
+
+.header-overlay-active::before,
+.header-overlay-active::after {
+  content: none !important;
+  display: none !important;
+}
+
+
+/* ======================================================
+   ACCESO ACTUAL
+   ====================================================== */
+
+.header-overlay-access {
+  position: absolute;
+
+  left: 68.2%;
+  top: 57.0%;
+
+  width: 23.6%;
+  height: 9.8%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  color: #16a9ff;
+
+  font-size: 1.88cqw;
+  font-weight: 900;
+  line-height: 1;
+
+  text-align: center;
+  white-space: nowrap;
+}
+
+
+/* ======================================================
+   CERRAR SESIÓN
+   ====================================================== */
+
+.header-overlay-logout {
+  position: absolute;
+
+  left: 68.8%;
+  top: 78.5%;
+
+  width: 24.0%;
+  height: 11.0%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+
+  border: 2px solid rgba(30, 174, 255, 1);
+  border-radius: 999px;
+
+  background: rgba(0, 31, 60, 0.88);
+
+  color: #3fc1ff;
+
+  font: inherit;
+  font-size: 1.90cqw;
+  font-weight: 900;
+  line-height: 1;
+
+  white-space: nowrap;
+  cursor: pointer;
+
+  box-shadow:
+    inset 0 0 16px rgba(27, 165, 244, 0.14),
+    0 0 10px rgba(28, 165, 244, 0.14);
+
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.header-overlay-logout:hover {
+  transform: translateY(-1px);
+
+  background: rgba(22, 126, 193, 0.24);
+
+  border-color: #42c3ff;
+
+  box-shadow:
+    0 0 12px rgba(31, 173, 255, 0.20);
+}
+
+
+/* ======================================================
+   ESPACIO INFERIOR
+   ====================================================== */
+
+.roac-header-background + .read-only-notice {
+  margin-top: 0;
+}
 
         .read-only-mode .attention-panel {
           display: none !important;
         }
       `}</style>
-      <header className="app-header">
-        <div className="brand-area">
-          <div className="roac-logo-placeholder">ROAC</div>
-
-          <div>
-            <p className="eyebrow">Turno actual</p>
-            <h1>ROAC Operations</h1>
-            <p>Noche · 20:00 a 08:00</p>
-            <p>
-              Acceso: {puedeModificar ? "Operaciones" : "Solo lectura"}
-            </p>
-          </div>
-        </div>
-
-        <div className="session-tools">
-          <span className="shift-badge">Activo</span>
-
-          <span className="access-badge">
-            {puedeModificar ? "OPERACIONES" : "SOLO LECTURA"}
-          </span>
-
-          <button
-            type="button"
-            className="logout-button"
-            onClick={() => void cerrarSesionUsuario()}
+      <header className="app-header roac-header-background">
+        {/* TURNO: DÍA / NOCHE */}
+        <div className="header-overlay-shift">
+          <span>{turnoActual.tipo}</span>
+          <span
+            className="header-overlay-shift-icon"
+            aria-hidden="true"
           >
-            Cerrar sesión
-          </button>
+            {turnoActual.tipo === "Noche" ? "🌙" : "☀️"}
+          </span>
         </div>
+
+        {/* HORARIO */}
+        <div className="header-overlay-time">
+          {turnoActual.horario}
+        </div>
+
+        {/* FECHA OPERACIONAL */}
+        <div className="header-overlay-date">
+          {turnoActual.fechaLarga}
+        </div>
+
+        {/* ESTADO */}
+        <div className="header-overlay-active">
+          Activo
+        </div>
+
+        {/* TIPO DE ACCESO */}
+        <div className="header-overlay-access">
+          {puedeModificar ? "OPERACIONES" : "SOLO LECTURA"}
+        </div>
+
+        {/* CERRAR SESIÓN */}
+        <button
+          type="button"
+          className="header-overlay-logout"
+          onClick={() => void cerrarSesionUsuario()}
+        >
+          Cerrar sesión
+        </button>
       </header>
 
       {!puedeModificar && (
@@ -1499,7 +2309,11 @@ function App() {
             Resumen del turno
           </p>
 
-          <h2>Status turno noche</h2>
+          <h2>Status turno {turnoActual.tipo.toLowerCase()}</h2>
+
+          <p className="shift-date">
+            Fecha operacional: {turnoActual.fechaOperacional}
+          </p>
 
           <div className="status-summary-card">
             <p>
