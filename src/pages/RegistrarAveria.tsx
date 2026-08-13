@@ -52,11 +52,11 @@ function RegistrarAveria({
 
   const [ubicacion, setUbicacion] = useState("");
   const [detalleInicial, setDetalleInicial] = useState("");
-  const [informadoPor, setInformadoPor] = useState("John");
+  const [informadoPor, setInformadoPor] = useState("");
 
   function publicar() {
     if (informadoPor.trim() === "") {
-      alert("Indica quién informó la avería.");
+      alert("Debes indicar quién informa la avería.");
       return;
     }
 
@@ -170,7 +170,8 @@ function RegistrarAveria({
 
       <div className="form-group">
         <label htmlFor="informadoPor">
-          Informado por
+          Quién informa la avería
+          <span aria-hidden="true"> *</span>
         </label>
 
         <input
@@ -180,6 +181,9 @@ function RegistrarAveria({
           onChange={(evento) =>
             setInformadoPor(evento.target.value)
           }
+          placeholder="Nombre de quien informa la avería"
+          required
+          aria-required="true"
         />
       </div>
 

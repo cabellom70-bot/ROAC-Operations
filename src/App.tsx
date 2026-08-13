@@ -30,8 +30,14 @@ type TipoTurno = "Día" | "Noche";
 type TurnoActual = {
   tipo: TipoTurno;
   horario: string;
-  fechaOperacional: string;
+  fechaCalendario: string;
   fechaLarga: string;
+  fechaInicioTurno: string;
+  fechaFinTurno: string;
+  horaInicioTurno: string;
+  horaFinTurno: string;
+  rangoTurno: string;
+  claveTurno: string;
 };
 
 const ZONA_HORARIA_OPERACIONAL = "America/Santiago";
@@ -88,47 +94,145 @@ function formatearFechaLarga(
   }).format(fechaUtc);
 }
 
+function sumarDiasCalendario(
+  year: number,
+  month: number,
+  day: number,
+  dias: number,
+) {
+  const fechaUtc = new Date(Date.UTC(year, month - 1, day));
+  fechaUtc.setUTCDate(fechaUtc.getUTCDate() + dias);
+
+  return {
+    year: fechaUtc.getUTCFullYear(),
+    month: fechaUtc.getUTCMonth() + 1,
+    day: fechaUtc.getUTCDate(),
+  };
+}
+
+
 function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
   const partes = obtenerPartesChile(fecha);
   const minutos = partes.hour * 60 + partes.minute;
 
-  // Según operación:
-  // 08:01 a 20:00 = Día
-  // 20:01 a 08:00 = Noche
-  const esTurnoDia = minutos >= 8 * 60 + 1 && minutos <= 20 * 60;
+  // Día: 08:01 a 20:00
+  // Noche: 20:01 a 08:00
+  const esTurnoDia =
+    minutos >= 8 * 60 + 1 &&
+    minutos <= 20 * 60;
 
-  let yearOperacional = partes.year;
-  let monthOperacional = partes.month;
-  let dayOperacional = partes.day;
+  const fechaCalendario = formatearFechaOperacional(
+    partes.year,
+    partes.month,
+    partes.day,
+  );
 
-  // Entre 00:00 y 08:00 seguimos perteneciendo al turno noche
-  // que comenzó el día anterior.
-  if (!esTurnoDia && minutos <= 8 * 60) {
-    const fechaBase = new Date(
-      Date.UTC(partes.year, partes.month - 1, partes.day),
+  const fechaLarga = formatearFechaLarga(
+    partes.year,
+    partes.month,
+    partes.day,
+  );
+
+  let inicio: { year: number; month: number; day: number };
+  let fin: { year: number; month: number; day: number };
+  let horaInicioTurno: string;
+  let horaFinTurno: string;
+
+  if (esTurnoDia) {
+    inicio = {
+      year: partes.year,
+      month: partes.month,
+      day: partes.day,
+    };
+
+    fin = {
+      year: partes.year,
+      month: partes.month,
+      day: partes.day,
+    };
+
+    horaInicioTurno = "08:01";
+    horaFinTurno = "20:00";
+  } else if (minutos >= 20 * 60 + 1) {
+    inicio = {
+      year: partes.year,
+      month: partes.month,
+      day: partes.day,
+    };
+
+    fin = sumarDiasCalendario(
+      partes.year,
+      partes.month,
+      partes.day,
+      1,
     );
-    fechaBase.setUTCDate(fechaBase.getUTCDate() - 1);
 
-    yearOperacional = fechaBase.getUTCFullYear();
-    monthOperacional = fechaBase.getUTCMonth() + 1;
-    dayOperacional = fechaBase.getUTCDate();
+    horaInicioTurno = "20:01";
+    horaFinTurno = "08:00";
+  } else {
+    inicio = sumarDiasCalendario(
+      partes.year,
+      partes.month,
+      partes.day,
+      -1,
+    );
+
+    fin = {
+      year: partes.year,
+      month: partes.month,
+      day: partes.day,
+    };
+
+    horaInicioTurno = "20:01";
+    horaFinTurno = "08:00";
   }
 
+  const fechaInicioTurno = formatearFechaOperacional(
+    inicio.year,
+    inicio.month,
+    inicio.day,
+  );
+
+  const fechaFinTurno = formatearFechaOperacional(
+    fin.year,
+    fin.month,
+    fin.day,
+  );
+
+  const tipo: TipoTurno =
+    esTurnoDia ? "Día" : "Noche";
+
   return {
-    tipo: esTurnoDia ? "Día" : "Noche",
-    horario: esTurnoDia ? "08:01 a 20:00" : "20:01 a 08:00",
-    fechaOperacional: formatearFechaOperacional(
-      yearOperacional,
-      monthOperacional,
-      dayOperacional,
-    ),
-    fechaLarga: formatearFechaLarga(
-      yearOperacional,
-      monthOperacional,
-      dayOperacional,
-    ),
+    tipo,
+    horario:
+      tipo === "Día"
+        ? "08:01 a 20:00"
+        : "20:01 a 08:00",
+
+    // Esta fecha cambia con el calendario real,
+    // aunque el turno noche continúe después de medianoche.
+    fechaCalendario,
+    fechaLarga,
+
+    // Intervalo completo de 12 horas del turno.
+    fechaInicioTurno,
+    fechaFinTurno,
+    horaInicioTurno,
+    horaFinTurno,
+
+    rangoTurno:
+      `${fechaInicioTurno} ${horaInicioTurno} → ` +
+      `${fechaFinTurno} ${horaFinTurno}`,
+
+    // Identificador estable para histórico e informes.
+    claveTurno:
+      `${inicio.year}-` +
+      `${String(inicio.month).padStart(2, "0")}-` +
+      `${String(inicio.day).padStart(2, "0")}-` +
+      `${tipo === "Día" ? "DIA" : "NOCHE"}`,
   };
 }
+
 
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
@@ -249,24 +353,56 @@ function App() {
   async function cargarEquipos() {
     const { data, error } = await supabase
       .from("equipos")
-      .select("*")
-      .order("numero_mina");
+      .select("*");
 
     if (error) {
       console.error(error);
       return;
     }
 
-    setEquipos(
-      data.map((e) => ({
-        numeroMina: e.numero_mina,
-        numeroInterno: e.numero_interno,
-        tipo: e.tipo,
-        marca: e.marca,
-        modelo: e.modelo,
-        estado: e.estado,
-      }))
-    );
+    const ordenEquipos = [
+      "051",
+      "052",
+      "053",
+      "054",
+      "055",
+      "070",
+      "071",
+      "072",
+      "592",
+      "067",
+      "098",
+      "099",
+    ];
+
+    const equiposConvertidos: Equipo[] = data.map((e) => ({
+      numeroMina: e.numero_mina,
+      numeroInterno: e.numero_interno,
+      tipo: e.tipo,
+      marca: e.marca,
+      modelo: e.modelo,
+      estado: e.estado,
+    }));
+
+    equiposConvertidos.sort((a, b) => {
+      const posicionA = ordenEquipos.indexOf(a.numeroMina);
+      const posicionB = ordenEquipos.indexOf(b.numeroMina);
+
+      const ordenA =
+        posicionA === -1 ? ordenEquipos.length : posicionA;
+      const ordenB =
+        posicionB === -1 ? ordenEquipos.length : posicionB;
+
+      if (ordenA !== ordenB) {
+        return ordenA - ordenB;
+      }
+
+      return a.numeroMina.localeCompare(b.numeroMina, "es", {
+        numeric: true,
+      });
+    });
+
+    setEquipos(equiposConvertidos);
   }
 
 
@@ -2312,7 +2448,7 @@ function App() {
           <h2>Status turno {turnoActual.tipo.toLowerCase()}</h2>
 
           <p className="shift-date">
-            Fecha operacional: {turnoActual.fechaOperacional}
+            Rango del turno: {turnoActual.rangoTurno}
           </p>
 
           <div className="status-summary-card">
