@@ -261,6 +261,7 @@ function App() {
   const [passwordLogin, setPasswordLogin] = useState("");
   const [errorLogin, setErrorLogin] = useState("");
   const [iniciandoSesion, setIniciandoSesion] = useState(false);
+  const [mostrandoEntrada, setMostrandoEntrada] = useState(false);
 
   const puedeModificar = rol === "operaciones";
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
@@ -316,12 +317,24 @@ function App() {
         return;
       }
 
+      // Credenciales correctas: mostramos la transición visual
+      // mientras cargamos el perfil. La animación dura al menos 3 s.
+      setMostrandoEntrada(true);
       setSesion(data.session);
-      await cargarPerfil(data.session.user.id);
+
+      await Promise.all([
+        cargarPerfil(data.session.user.id),
+        new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 2000);
+        }),
+      ]);
+
       setPasswordLogin("");
       setVista("inicio");
+      setMostrandoEntrada(false);
     } catch (error) {
       console.error(error);
+      setMostrandoEntrada(false);
       setErrorLogin("No se pudo iniciar sesión.");
     } finally {
       setIniciandoSesion(false);
@@ -1191,161 +1204,614 @@ function App() {
     );
   }
 
-  if (!sesion) {
+  if (mostrandoEntrada) {
     return (
-      <main className="auth-screen">
+      <main className="roac-entry-screen">
         <style>{`
-          .auth-screen {
+          .roac-entry-screen {
             min-height: 100vh;
+            box-sizing: border-box;
             display: grid;
             place-items: center;
             padding: 24px;
-            background: #edf3f9;
+            position: relative;
+            overflow: hidden;
+            background-color: #021426;
+            background-image: url("/roac-login-bg.png");
+            background-size: 100% 100%;
+            background-position: center center;
+            background-repeat: no-repeat;
             font-family: inherit;
           }
 
-          .auth-card {
-            width: min(420px, 100%);
-            background: #ffffff;
-            border-radius: 28px;
-            padding: 30px;
-            box-shadow: 0 20px 60px rgba(15, 34, 58, 0.14);
+          .roac-entry-screen::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background:
+              radial-gradient(
+                circle at 50% 48%,
+                rgba(22, 140, 255, 0.15),
+                transparent 28%
+              ),
+              rgba(0, 9, 26, 0.13);
           }
 
-          .auth-brand {
+          .roac-entry-content {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
             text-align: center;
-            margin-bottom: 26px;
           }
 
-          .auth-logo {
-            width: 74px;
-            height: 74px;
-            margin: 0 auto 14px;
-            border: 2px solid #4b86b0;
-            border-radius: 50%;
+          .roac-entry-logo-wrap {
+            width: 190px;
+            height: 190px;
             display: grid;
             place-items: center;
-            font-weight: 800;
-            letter-spacing: 2px;
-            color: #315f82;
+            position: relative;
+            margin-bottom: 22px;
           }
 
-          .auth-brand h1 {
+          .roac-entry-logo-wrap::before,
+          .roac-entry-logo-wrap::after {
+            content: "";
+            position: absolute;
+            border-radius: 50%;
+            pointer-events: none;
+          }
+
+          .roac-entry-logo-wrap::before {
+            inset: 13px;
+            border: 1px solid rgba(44, 165, 255, 0.30);
+            box-shadow:
+              0 0 30px rgba(32, 145, 255, 0.20),
+              inset 0 0 26px rgba(32, 145, 255, 0.08);
+            animation: roacHalo 1.5s ease-in-out infinite;
+          }
+
+          .roac-entry-logo-wrap::after {
+            inset: 0;
+            background: radial-gradient(
+              circle,
+              rgba(26, 139, 255, 0.15) 0%,
+              rgba(26, 139, 255, 0.05) 40%,
+              transparent 68%
+            );
+            filter: blur(7px);
+            animation: roacGlow 1.5s ease-in-out infinite;
+          }
+
+          .roac-entry-logo {
+            width: 138px;
+            height: auto;
+            position: relative;
+            z-index: 2;
+            transform-origin: center center;
+            filter:
+              drop-shadow(0 0 8px rgba(0, 129, 255, 0.32))
+              drop-shadow(0 12px 25px rgba(0, 0, 0, 0.24));
+            animation: roacLogoPulse 1.5s ease-in-out infinite;
+          }
+
+          .roac-entry-title {
             margin: 0;
-            font-size: 30px;
-          }
-
-          .auth-brand p {
-            margin: 8px 0 0;
-            color: #607086;
-          }
-
-          .auth-form {
-            display: grid;
-            gap: 14px;
-          }
-
-          .auth-form label {
-            display: grid;
-            gap: 7px;
-            font-weight: 700;
-            color: #26384e;
-          }
-
-          .auth-form input {
-            width: 100%;
-            box-sizing: border-box;
-            border: 1px solid #cad6e2;
-            border-radius: 14px;
-            padding: 14px 15px;
-            font: inherit;
-            outline: none;
-          }
-
-          .auth-form input:focus {
-            border-color: #3478f6;
-            box-shadow: 0 0 0 3px rgba(52, 120, 246, 0.12);
-          }
-
-          .auth-submit {
-            border: 0;
-            border-radius: 14px;
-            padding: 14px 18px;
-            background: #2463eb;
             color: #ffffff;
-            font: inherit;
-            font-weight: 800;
-            cursor: pointer;
+            font-size: clamp(13px, 1.8vw, 17px);
+            font-weight: 850;
+            letter-spacing: 2.3px;
+            text-transform: uppercase;
+            text-shadow: 0 0 14px rgba(31, 155, 255, 0.28);
           }
 
-          .auth-submit:disabled {
-            opacity: 0.6;
-            cursor: wait;
+          .roac-entry-dots {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            margin-top: 15px;
           }
 
-          .auth-error {
-            margin: 0;
-            padding: 10px 12px;
-            border-radius: 12px;
-            background: #fff0ee;
-            color: #b42318;
-            font-size: 14px;
+          .roac-entry-dots span {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #28a9ff;
+            box-shadow: 0 0 8px rgba(40, 169, 255, 0.75);
+            animation: roacDot 1.05s ease-in-out infinite;
           }
 
-          .auth-help {
-            margin: 16px 0 0;
-            text-align: center;
-            color: #718096;
-            font-size: 13px;
+          .roac-entry-dots span:nth-child(2) {
+            animation-delay: 0.16s;
+          }
+
+          .roac-entry-dots span:nth-child(3) {
+            animation-delay: 0.32s;
+          }
+
+          @keyframes roacLogoPulse {
+            0%, 100% {
+              transform: scale(0.96) rotate(-1deg);
+              opacity: 0.88;
+            }
+            50% {
+              transform: scale(1.04) rotate(1deg);
+              opacity: 1;
+            }
+          }
+
+          @keyframes roacHalo {
+            0%, 100% {
+              transform: scale(0.91);
+              opacity: 0.34;
+            }
+            50% {
+              transform: scale(1.06);
+              opacity: 0.92;
+            }
+          }
+
+          @keyframes roacGlow {
+            0%, 100% {
+              transform: scale(0.90);
+              opacity: 0.38;
+            }
+            50% {
+              transform: scale(1.14);
+              opacity: 1;
+            }
+          }
+
+          @keyframes roacDot {
+            0%, 100% {
+              transform: translateY(0) scale(0.82);
+              opacity: 0.35;
+            }
+            50% {
+              transform: translateY(-4px) scale(1.08);
+              opacity: 1;
+            }
+          }
+
+          @media (max-width: 520px) {
+            .roac-entry-logo-wrap {
+              width: 155px;
+              height: 155px;
+            }
+
+            .roac-entry-logo {
+              width: 112px;
+            }
+
+            .roac-entry-title {
+              font-size: 12px;
+              letter-spacing: 1.7px;
+            }
           }
         `}</style>
 
-        <section className="auth-card">
-          <div className="auth-brand">
-            <div className="auth-logo">ROAC</div>
+        <section
+          className="roac-entry-content"
+          aria-live="polite"
+          aria-label="Iniciando ROAC Operations"
+        >
+          <div className="roac-entry-logo-wrap">
+            <img
+              className="roac-entry-logo"
+              src="/roac-logo.png"
+              alt="ROAC"
+            />
+          </div>
+
+          <p className="roac-entry-title">
+            Iniciando ROAC Operations
+          </p>
+
+          <div className="roac-entry-dots" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!sesion) {
+    return (
+      <main className="login-screen">
+        <style>{`
+          .login-screen {
+            min-height: 100vh;
+            box-sizing: border-box;
+            display: grid;
+            place-items: center;
+            padding: 28px 18px;
+            position: relative;
+            overflow: hidden;
+            font-family: inherit;
+            background-color: #021426;
+            background-image: url("/roac-login-bg.png");
+            background-repeat: no-repeat;
+            background-size: 100% 100%;
+            background-position: center center;
+          }
+
+          .login-screen::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: rgba(0, 8, 22, 0.08);
+            z-index: 0;
+          }
+
+          .login-screen::after {
+            content: none;
+          }
+
+          .login-card {
+            position: relative;
+            z-index: 2;
+            width: min(430px, 100%);
+            box-sizing: border-box;
+            padding: 36px 34px 30px;
+            overflow: hidden;
+            background: linear-gradient(
+              180deg,
+              rgba(255, 255, 255, 0.995),
+              rgba(250, 252, 255, 0.985)
+            );
+            border: 1px solid rgba(197, 213, 232, 0.80);
+            border-radius: 28px;
+            box-shadow:
+              0 28px 75px rgba(0, 8, 24, 0.43),
+              0 0 45px rgba(32, 126, 255, 0.10);
+          }
+
+          .login-card::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 15%;
+            right: 15%;
+            height: 1px;
+            background: linear-gradient(
+              90deg,
+              transparent,
+              rgba(31, 126, 255, 0.48),
+              transparent
+            );
+          }
+
+          .login-brand {
+            text-align: center;
+            margin-bottom: 25px;
+          }
+
+          .login-logo {
+            display: block;
+            width: 122px;
+            max-width: 42%;
+            height: auto;
+            object-fit: contain;
+            margin: 0 auto 7px;
+            filter: drop-shadow(0 8px 14px rgba(19, 77, 141, 0.12));
+          }
+
+          .login-brand h1 {
+            margin: 4px 0 0;
+            color: #071a38;
+            font-size: 29px;
+            line-height: 1.12;
+            font-weight: 800;
+            letter-spacing: -0.7px;
+          }
+
+          .login-brand p {
+            margin: 9px 0 0;
+            color: #587294;
+            font-size: 15px;
+            font-weight: 500;
+          }
+
+          .login-divider {
+            display: flex;
+            align-items: center;
+            margin: 24px 0 24px;
+          }
+
+          .login-divider::before,
+          .login-divider::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+          }
+
+          .login-divider::before {
+            background: linear-gradient(
+              90deg,
+              transparent,
+              #b5c9df
+            );
+          }
+
+          .login-divider::after {
+            background: linear-gradient(
+              90deg,
+              #b5c9df,
+              transparent
+            );
+          }
+
+          .login-divider-dot {
+            width: 7px;
+            height: 7px;
+            flex: 0 0 7px;
+            margin: 0 7px;
+            border-radius: 50%;
+            background: #168cff;
+            box-shadow: 0 0 8px rgba(22, 140, 255, 0.74);
+          }
+
+          .login-form {
+            display: grid;
+            gap: 17px;
+          }
+
+          .login-field {
+            display: grid;
+            gap: 8px;
+            color: #101d36;
+            font-size: 14px;
+            font-weight: 800;
+          }
+
+          .login-input-wrapper {
+            position: relative;
+          }
+
+          .login-input-icon {
+            position: absolute;
+            left: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 21px;
+            height: 21px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b8bad;
+            pointer-events: none;
+          }
+
+          .login-input-icon svg {
+            width: 21px;
+            height: 21px;
+            display: block;
+          }
+
+          .login-input {
+            width: 100%;
+            height: 57px;
+            box-sizing: border-box;
+            padding: 0 16px 0 48px;
+            border: 1px solid #bed0e3;
+            border-radius: 13px;
+            background: rgba(255, 255, 255, 0.94);
+            color: #0b172d;
+            font: inherit;
+            font-size: 15px;
+            font-weight: 700;
+            outline: none;
+            transition:
+              border-color 150ms ease,
+              box-shadow 150ms ease,
+              background 150ms ease;
+          }
+
+          .login-input::placeholder {
+            color: #9aabba;
+            font-weight: 500;
+          }
+
+          .login-input:focus {
+            border-color: #268cff;
+            background: #ffffff;
+            box-shadow: 0 0 0 3px rgba(38, 140, 255, 0.12);
+          }
+
+          .login-submit {
+            width: 100%;
+            height: 56px;
+            margin-top: 4px;
+            border: 1px solid rgba(0, 102, 255, 0.55);
+            border-radius: 13px;
+            background: linear-gradient(
+              135deg,
+              #1260ef 0%,
+              #176bff 50%,
+              #0750e9 100%
+            );
+            box-shadow:
+              0 9px 19px rgba(14, 92, 225, 0.23),
+              inset 0 1px 0 rgba(255, 255, 255, 0.20);
+            color: #ffffff;
+            font: inherit;
+            font-size: 16px;
+            font-weight: 850;
+            cursor: pointer;
+            transition:
+              transform 150ms ease,
+              box-shadow 150ms ease,
+              opacity 150ms ease;
+          }
+
+          .login-submit:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow:
+              0 12px 25px rgba(14, 92, 225, 0.29),
+              inset 0 1px 0 rgba(255, 255, 255, 0.20);
+          }
+
+          .login-submit:active:not(:disabled) {
+            transform: translateY(0);
+          }
+
+          .login-submit:disabled {
+            opacity: 0.62;
+            cursor: wait;
+          }
+
+          .login-error {
+            margin: -3px 0 0;
+            padding: 10px 12px;
+            border: 1px solid #ffd0cb;
+            border-radius: 10px;
+            background: #fff2f0;
+            color: #b42318;
+            font-size: 13px;
+            font-weight: 650;
+          }
+
+          .login-footer {
+            margin: 24px 0 0;
+            text-align: center;
+            color: #617895;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 0.1px;
+          }
+
+          @media (max-width: 520px) {
+            .login-screen {
+              padding: 18px 14px;
+            }
+
+            .login-card {
+              padding: 30px 22px 25px;
+              border-radius: 24px;
+            }
+
+            .login-logo {
+              width: 108px;
+            }
+
+            .login-brand h1 {
+              font-size: 26px;
+            }
+
+            .login-brand p {
+              font-size: 14px;
+            }
+
+            .login-input {
+              height: 54px;
+            }
+
+            .login-submit {
+              height: 54px;
+            }
+          }
+        `}</style>
+
+        <section className="login-card">
+          <div className="login-brand">
+            <img
+              className="login-logo"
+              src="/roac-logo.png"
+              alt="ROAC"
+            />
+
             <h1>ROAC Operations</h1>
             <p>Acceso al sistema operacional</p>
+
+            <div className="login-divider" aria-hidden="true">
+              <span className="login-divider-dot" />
+            </div>
           </div>
 
           <form
-            className="auth-form"
+            className="login-form"
             onSubmit={(evento) => {
               evento.preventDefault();
               void iniciarSesion();
             }}
           >
-            <label>
+            <label className="login-field">
               Usuario
-              <input
-                autoComplete="username"
-                value={usuarioLogin}
-                onChange={(evento) =>
-                  setUsuarioLogin(evento.target.value)
-                }
-                placeholder="operaciones o consulta"
-              />
+
+              <div className="login-input-wrapper">
+                <span className="login-input-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  >
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4.5 21c0-4.1 3.3-7.4 7.5-7.4s7.5 3.3 7.5 7.4" />
+                  </svg>
+                </span>
+
+                <input
+                  className="login-input"
+                  autoComplete="username"
+                  value={usuarioLogin}
+                  onChange={(evento) =>
+                    setUsuarioLogin(evento.target.value)
+                  }
+                  placeholder="operaciones o consulta"
+                />
+              </div>
             </label>
 
-            <label>
+            <label className="login-field">
               Contraseña
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={passwordLogin}
-                onChange={(evento) =>
-                  setPasswordLogin(evento.target.value)
-                }
-                placeholder="••••••••"
-              />
+
+              <div className="login-input-wrapper">
+                <span className="login-input-icon" aria-hidden="true">
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                  >
+                    <rect
+                      x="5"
+                      y="10"
+                      width="14"
+                      height="11"
+                      rx="2"
+                    />
+                    <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+                  </svg>
+                </span>
+
+                <input
+                  className="login-input"
+                  type="password"
+                  autoComplete="current-password"
+                  value={passwordLogin}
+                  onChange={(evento) =>
+                    setPasswordLogin(evento.target.value)
+                  }
+                  placeholder="••••••••"
+                />
+              </div>
             </label>
 
             {errorLogin && (
-              <p className="auth-error">{errorLogin}</p>
+              <p className="login-error">{errorLogin}</p>
             )}
 
             <button
               type="submit"
-              className="auth-submit"
+              className="login-submit"
               disabled={iniciandoSesion}
             >
               {iniciandoSesion
@@ -1354,7 +1820,7 @@ function App() {
             </button>
           </form>
 
-          <p className="auth-help">
+          <p className="login-footer">
             Acceso restringido · ROAC Operations
           </p>
         </section>
