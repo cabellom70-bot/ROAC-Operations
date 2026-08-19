@@ -1,7 +1,8 @@
 export type EstadoEquipo =
   | "Operativo"
   | "Fuera de servicio"
-  | "En atención";
+  | "En atención"
+  | "Mantenimiento programado";
 
 export type Equipo = {
   numeroMina: string;

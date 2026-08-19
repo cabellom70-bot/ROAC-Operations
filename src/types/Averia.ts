@@ -34,4 +34,7 @@ export type Averia = {
   horaAtencion: string;
   trabajoRealizado: string;
   horaCierre: string;
+  fechaAviso: string;
+  fechaAtencion: string;
+  fechaCierre: string;
 };

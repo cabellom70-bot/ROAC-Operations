@@ -1,8 +1,4 @@
-type EstadoEquipo =
-  | "Operativo"
-  | "Fuera de servicio"
-  | "En atención";
-
+import type { EstadoEquipo } from "../types/Equipo";
 
 type EquipoCardProps = {
   numeroMina: string;
@@ -14,7 +10,6 @@ type EquipoCardProps = {
   onClick?: () => void;
 };
 
-
 function obtenerClaseEstado(estado: EstadoEquipo) {
   switch (estado) {
     case "Operativo":
@@ -25,9 +20,11 @@ function obtenerClaseEstado(estado: EstadoEquipo) {
 
     case "Fuera de servicio":
       return "equipment-out-of-service";
+
+    case "Mantenimiento programado":
+      return "equipment-programmed-maintenance";
   }
 }
-
 
 function obtenerImagenEquipo(modelo: string) {
   if (modelo === "980E-4" || modelo === "980E-5") {
@@ -43,8 +40,8 @@ function obtenerImagenEquipo(modelo: string) {
   }
 
   if (modelo === "PC-7000" || modelo === "PC7000") {
-  return "/equipos/komatsu-pc7000.png";
-}
+    return "/equipos/komatsu-pc7000.png";
+  }
 
   if (modelo === "18M") {
     return "/equipos/cat-18m.png";
@@ -52,7 +49,6 @@ function obtenerImagenEquipo(modelo: string) {
 
   return "";
 }
-
 
 function EquipoCard({
   numeroMina,
@@ -73,10 +69,13 @@ function EquipoCard({
 
   const imagenEquipo = obtenerImagenEquipo(modelo);
 
-
   if (onClick) {
     return (
-      <button className={clases} type="button" onClick={onClick}>
+      <button
+        className={clases}
+        type="button"
+        onClick={onClick}
+      >
         <strong>{numeroMina}</strong>
         <span>{numeroInterno}</span>
         <small>{modelo}</small>
@@ -129,9 +128,10 @@ function EquipoCard({
     );
   }
 
-
   return (
-    <article className={`${clases} home-equipment-card`}>
+    <article
+      className={`${clases} home-equipment-card`}
+    >
       <strong>{numeroMina}</strong>
       <span>{numeroInterno}</span>
       <small>{modelo}</small>
@@ -183,6 +183,5 @@ function EquipoCard({
     </article>
   );
 }
-
 
 export default EquipoCard;

@@ -1,5 +1,5 @@
 import { supabase } from "./lib/supabase";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
 import "./App.css";
@@ -12,6 +12,7 @@ import RegistrarAveria, {
 
 import type { Averia } from "./types/Averia";
 import type { Equipo } from "./types/Equipo";
+import type { Mantenimiento } from "./types/Mantenimiento";
 
 
 type Vista =
@@ -21,7 +22,10 @@ type Vista =
   | "seleccionar-equipo"
   | "registrar-averia"
   | "detalle-averia"
-  | "seleccionar-backup";
+  | "seleccionar-backup"
+  | "seleccionar-equipo-mantenimiento"
+  | "registrar-mantenimiento"
+  | "detalle-mantenimiento";
 
 type RolUsuario = "operaciones" | "consulta";
 
@@ -232,7 +236,124 @@ function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
       `${tipo === "Día" ? "DIA" : "NOCHE"}`,
   };
 }
+function crearFechaChile(
+  fecha: string,
+  hora: string,
+) {
+  const [dia, mes, year] = fecha.split("/").map(Number);
+  const [horas, minutos] = hora.split(":").map(Number);
 
+  // Primera aproximación UTC
+  let fechaUtc = new Date(
+    Date.UTC(
+      year,
+      mes - 1,
+      dia,
+      horas,
+      minutos,
+      0,
+      0,
+    ),
+  );
+
+  // Calculamos qué hora representa esa fecha en Santiago
+  const partesChile = obtenerPartesChile(fechaUtc);
+
+  const minutosEsperados =
+    horas * 60 + minutos;
+
+  const minutosObtenidos =
+    partesChile.hour * 60 + partesChile.minute;
+
+  let diferencia =
+    minutosEsperados - minutosObtenidos;
+
+  // Corrige cruces de medianoche
+  if (diferencia > 720) {
+    diferencia -= 1440;
+  }
+
+  if (diferencia < -720) {
+    diferencia += 1440;
+  }
+
+  fechaUtc = new Date(
+    fechaUtc.getTime() + diferencia * 60_000,
+  );
+
+  return fechaUtc;
+}
+
+
+function obtenerIntervaloTurno(turno: TurnoActual) {
+  const inicio = crearFechaChile(
+    turno.fechaInicioTurno,
+    turno.horaInicioTurno,
+  );
+
+  const fin = crearFechaChile(
+    turno.fechaFinTurno,
+    turno.horaFinTurno,
+  );
+
+  return {
+    inicio,
+    fin,
+  };
+}
+
+function fechaDentroDelTurno(
+  fechaIso: string,
+  turno: TurnoActual,
+) {
+  if (!fechaIso) {
+    return false;
+  }
+
+  const fecha = new Date(fechaIso);
+  const { inicio, fin } = obtenerIntervaloTurno(turno);
+
+  return fecha >= inicio && fecha <= fin;
+}
+
+function esMinutoEntregaTurno() {
+  const partes = obtenerPartesChile(new Date());
+
+  return (
+    (partes.hour === 8 && partes.minute === 0) ||
+    (partes.hour === 20 && partes.minute === 0)
+  );
+}
+
+function formatearTiempoFueraServicio(
+  fechaAviso: string,
+  fechaCierre: string,
+) {
+  if (!fechaAviso || !fechaCierre) {
+    return "";
+  }
+
+  const inicio = new Date(fechaAviso).getTime();
+  const fin = new Date(fechaCierre).getTime();
+
+  if (Number.isNaN(inicio) || Number.isNaN(fin) || fin < inicio) {
+    return "";
+  }
+
+  const minutosTotales = Math.floor((fin - inicio) / 60_000);
+  const dias = Math.floor(minutosTotales / 1440);
+  const horas = Math.floor((minutosTotales % 1440) / 60);
+  const minutos = minutosTotales % 60;
+
+  const horasTexto = String(horas).padStart(2, "0");
+  const minutosTexto = String(minutos).padStart(2, "0");
+
+  if (dias > 0) {
+    return `${dias} d ${horasTexto} h ${minutosTexto} min`;
+  }
+
+  return `${horasTexto} h ${minutosTexto} min`;
+}
 
 function obtenerHoraActual() {
   return new Date().toLocaleTimeString("es-CL", {
@@ -246,10 +367,16 @@ function App() {
   const [vista, setVista] = useState<Vista>("inicio");
   const [equipos, setEquipos] = useState<Equipo[]>([]);
   const [averias, setAverias] = useState<Averia[]>([]);
+  const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [equipoSeleccionado, setEquipoSeleccionado] =
     useState<Equipo | null>(null);
   const [averiaSeleccionadaId, setAveriaSeleccionadaId] =
     useState<number | null>(null);
+  const [mantenimientoSeleccionadoId, setMantenimientoSeleccionadoId] =
+    useState<number | null>(null);
+  const [motivoMantenimiento, setMotivoMantenimiento] = useState("");
+  const [responsableMantenimiento, setResponsableMantenimiento] = useState("");
+  const [trabajoMantenimiento, setTrabajoMantenimiento] = useState("");
   const [numeroBackup, setNumeroBackup] =
     useState<string | null>(null);
 
@@ -262,6 +389,21 @@ function App() {
   const [errorLogin, setErrorLogin] = useState("");
   const [iniciandoSesion, setIniciandoSesion] = useState(false);
   const [mostrandoEntrada, setMostrandoEntrada] = useState(false);
+
+  const [alertaNuevaAveria, setAlertaNuevaAveria] = useState<{
+    id: number;
+    numeroMina: string;
+    sistema: string;
+    informadoPor: string;
+  } | null>(null);
+
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const alertaTimeoutRef = useRef<number | null>(null);
+  const averiaLocalPendienteRef = useRef<{
+    equipoId: number;
+    sistema: string;
+    vence: number;
+  } | null>(null);
 
   const puedeModificar = rol === "operaciones";
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
@@ -318,7 +460,7 @@ function App() {
       }
 
       // Credenciales correctas: mostramos la transición visual
-      // mientras cargamos el perfil. La animación dura al menos 3 s.
+      // mientras cargamos el perfil. La animación dura al menos 2 s.
       setMostrandoEntrada(true);
       setSesion(data.session);
 
@@ -348,9 +490,14 @@ function App() {
     setRol(null);
     setEquipos([]);
     setAverias([]);
+    setMantenimientos([]);
     setNumeroBackup(null);
     setEquipoSeleccionado(null);
     setAveriaSeleccionadaId(null);
+    setMantenimientoSeleccionadoId(null);
+    setMotivoMantenimiento("");
+    setResponsableMantenimiento("");
+    setTrabajoMantenimiento("");
     setVista("inicio");
   }
 
@@ -361,6 +508,113 @@ function App() {
 
     alert("Este acceso es de solo lectura.");
     return false;
+  }
+
+  function obtenerAudioContexto() {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext();
+    }
+
+    return audioContextRef.current;
+  }
+
+  function reproducirAlertaSonora() {
+    try {
+      const contexto = obtenerAudioContexto();
+
+      if (contexto.state === "suspended") {
+        void contexto.resume();
+      }
+
+      const inicio = contexto.currentTime + 0.03;
+      const pulsos = [0, 0.22, 0.44];
+
+      pulsos.forEach((desfase, indice) => {
+        const oscilador = contexto.createOscillator();
+        const ganancia = contexto.createGain();
+        const comienzo = inicio + desfase;
+        const termino = comienzo + 0.14;
+
+        oscilador.type = "sine";
+        oscilador.frequency.setValueAtTime(
+          indice === 1 ? 980 : 820,
+          comienzo,
+        );
+
+        ganancia.gain.setValueAtTime(0.0001, comienzo);
+        ganancia.gain.exponentialRampToValueAtTime(0.18, comienzo + 0.02);
+        ganancia.gain.exponentialRampToValueAtTime(0.0001, termino);
+
+        oscilador.connect(ganancia);
+        ganancia.connect(contexto.destination);
+        oscilador.start(comienzo);
+        oscilador.stop(termino + 0.02);
+      });
+    } catch (error) {
+      console.warn("No se pudo reproducir la alerta sonora:", error);
+    }
+  }
+
+  function cerrarAlertaNuevaAveria() {
+    setAlertaNuevaAveria(null);
+
+    if (alertaTimeoutRef.current !== null) {
+      window.clearTimeout(alertaTimeoutRef.current);
+      alertaTimeoutRef.current = null;
+    }
+  }
+
+  async function manejarNuevaAveriaRealtime(registro: {
+    id?: number;
+    equipo_id?: number;
+    sistema?: string;
+    informado_por?: string;
+  }) {
+    if (!registro.id || !registro.equipo_id) {
+      return;
+    }
+
+    const pendienteLocal = averiaLocalPendienteRef.current;
+    const esPublicacionDeEsteDispositivo = Boolean(
+      pendienteLocal &&
+        Date.now() <= pendienteLocal.vence &&
+        pendienteLocal.equipoId === registro.equipo_id &&
+        pendienteLocal.sistema === (registro.sistema ?? ""),
+    );
+
+    if (esPublicacionDeEsteDispositivo) {
+      averiaLocalPendienteRef.current = null;
+      return;
+    }
+
+    const { data: equipoDb, error } = await supabase
+      .from("equipos")
+      .select("numero_mina")
+      .eq("id", registro.equipo_id)
+      .single();
+
+    if (error || !equipoDb) {
+      console.error("No se pudo identificar el equipo de la nueva avería:", error);
+      return;
+    }
+
+    if (alertaTimeoutRef.current !== null) {
+      window.clearTimeout(alertaTimeoutRef.current);
+    }
+
+    setAlertaNuevaAveria({
+      id: registro.id,
+      numeroMina: equipoDb.numero_mina,
+      sistema: registro.sistema ?? "Sin sistema informado",
+      informadoPor: registro.informado_por ?? "Sin informar",
+    });
+
+    reproducirAlertaSonora();
+
+    alertaTimeoutRef.current = window.setTimeout(() => {
+      setAlertaNuevaAveria(null);
+      alertaTimeoutRef.current = null;
+    }, 12_000);
   }
 
   async function cargarEquipos() {
@@ -477,6 +731,9 @@ function App() {
         informadoPor: registro.informado_por,
         tomadaPor: registro.tomada_por ?? "",
         trabajoRealizado: registro.trabajo_realizado ?? "",
+        fechaAviso: registro.fecha_aviso,
+        fechaAtencion: registro.fecha_atencion ?? "", 
+        fechaCierre: registro.fecha_cierre ?? "",
         horaAviso: new Date(registro.fecha_aviso).toLocaleTimeString(
           "es-CL",
           {
@@ -512,6 +769,83 @@ function App() {
   }
 
 
+  async function cargarMantenimientos() {
+    const { data, error } = await supabase
+      .from("mantenimientos")
+      .select(`
+        id,
+        motivo,
+        responsable,
+        trabajo_realizado,
+        estado,
+        fecha_inicio,
+        fecha_fin,
+        equipos (
+          numero_mina,
+          numero_interno,
+          tipo,
+          marca,
+          modelo,
+          estado
+        )
+      `)
+      .order("fecha_inicio", {
+        ascending: false,
+      });
+
+    if (error) {
+      console.error("Error al cargar mantenimientos:", error);
+      return;
+    }
+
+    const mantenimientosConvertidos: Mantenimiento[] = data.map(
+      (registro) => {
+        const equipoDb = Array.isArray(registro.equipos)
+          ? registro.equipos[0]
+          : registro.equipos;
+
+        return {
+          id: registro.id,
+          equipo: {
+            numeroMina: equipoDb.numero_mina,
+            numeroInterno: equipoDb.numero_interno,
+            tipo: equipoDb.tipo,
+            marca: equipoDb.marca,
+            modelo: equipoDb.modelo,
+            estado: equipoDb.estado,
+          },
+          motivo: registro.motivo,
+          responsable: registro.responsable,
+          trabajoRealizado: registro.trabajo_realizado ?? "",
+          estado: registro.estado,
+          fechaInicio: registro.fecha_inicio,
+          fechaFin: registro.fecha_fin ?? "",
+          horaInicio: new Date(registro.fecha_inicio).toLocaleTimeString(
+            "es-CL",
+            {
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: false,
+            },
+          ),
+          horaFin: registro.fecha_fin
+            ? new Date(registro.fecha_fin).toLocaleTimeString(
+                "es-CL",
+                {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  hour12: false,
+                },
+              )
+            : "",
+        };
+      },
+    );
+
+    setMantenimientos(mantenimientosConvertidos);
+  }
+
+
   async function cargarBackup() {
     const { data, error } = await supabase
       .from("configuracion")
@@ -527,6 +861,31 @@ function App() {
     setNumeroBackup(data?.valor ?? null);
   }
 
+
+  useEffect(() => {
+    function habilitarAudio() {
+      try {
+        const contexto = obtenerAudioContexto();
+        if (contexto.state === "suspended") {
+          void contexto.resume();
+        }
+      } catch (error) {
+        console.warn("No se pudo habilitar el audio:", error);
+      }
+    }
+
+    window.addEventListener("pointerdown", habilitarAudio, { once: true });
+    window.addEventListener("keydown", habilitarAudio, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", habilitarAudio);
+      window.removeEventListener("keydown", habilitarAudio);
+
+      if (alertaTimeoutRef.current !== null) {
+        window.clearTimeout(alertaTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     function actualizarTurno() {
@@ -600,6 +959,7 @@ function App() {
     void Promise.all([
       cargarEquipos(),
       cargarAverias(),
+      cargarMantenimientos(),
       cargarBackup(),
     ]);
   }, [sesion?.user.id, rol]);
@@ -618,8 +978,19 @@ function App() {
           schema: "public",
           table: "averias",
         },
-        () => {
+        (payload) => {
           void cargarAverias();
+
+          if (payload.eventType === "INSERT") {
+            void manejarNuevaAveriaRealtime(
+              payload.new as {
+                id?: number;
+                equipo_id?: number;
+                sistema?: string;
+                informado_por?: string;
+              },
+            );
+          }
         },
       )
       .on(
@@ -631,6 +1002,17 @@ function App() {
         },
         () => {
           void cargarEquipos();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "mantenimientos",
+        },
+        () => {
+          void cargarMantenimientos();
         },
       )
       .on(
@@ -655,8 +1037,79 @@ function App() {
     (averia) => averia.estadoAveria !== "Cerrada",
   );
 
-  const averiasCerradas = averias.filter(
-    (averia) => averia.estadoAveria === "Cerrada",
+const averiasDelTurno = averias.filter(
+  (averia) =>
+    fechaDentroDelTurno(
+      averia.fechaAviso,
+      turnoActual,
+    ),
+);
+
+const averiasHeredadas = averias.filter((averia) => {
+  if (!averia.fechaAviso) {
+    return false;
+  }
+
+  const fechaAviso = new Date(averia.fechaAviso);
+  const { inicio } = obtenerIntervaloTurno(turnoActual);
+
+  const estabaAbiertaAlInicio =
+    !averia.fechaCierre ||
+    new Date(averia.fechaCierre) >= inicio;
+
+  return (
+    fechaAviso < inicio &&
+    estabaAbiertaAlInicio
+  );
+});
+
+const averiasCerradasEnTurno = averias.filter(
+  (averia) =>
+    Boolean(averia.fechaCierre) &&
+    fechaDentroDelTurno(
+      averia.fechaCierre,
+      turnoActual,
+    ),
+);
+
+  const mantenimientosEnCurso = mantenimientos.filter(
+    (mantenimiento) => mantenimiento.estado === "En curso",
+  );
+
+  const mantenimientosDelTurno = mantenimientos.filter(
+    (mantenimiento) =>
+      fechaDentroDelTurno(
+        mantenimiento.fechaInicio,
+        turnoActual,
+      ),
+  );
+
+  const mantenimientosHeredados = mantenimientos.filter((mantenimiento) => {
+    if (!mantenimiento.fechaInicio) {
+      return false;
+    }
+
+    const fechaInicio = new Date(mantenimiento.fechaInicio);
+    const { inicio } = obtenerIntervaloTurno(turnoActual);
+
+    const estabaActivoAlInicio =
+      !mantenimiento.fechaFin ||
+      new Date(mantenimiento.fechaFin) >= inicio;
+
+    return fechaInicio < inicio && estabaActivoAlInicio;
+  });
+
+  const mantenimientosFinalizadosEnTurno = mantenimientos.filter(
+    (mantenimiento) =>
+      Boolean(mantenimiento.fechaFin) &&
+      fechaDentroDelTurno(
+        mantenimiento.fechaFin,
+        turnoActual,
+      ),
+  );
+
+  const mantenimientoSeleccionado = mantenimientos.find(
+    (mantenimiento) => mantenimiento.id === mantenimientoSeleccionadoId,
   );
 
   const averiaSeleccionada = averias.find(
@@ -675,6 +1128,10 @@ function App() {
     (equipo) => equipo.estado === "Fuera de servicio",
   ).length;
 
+  const equiposEnMantenimiento = equipos.filter(
+    (equipo) => equipo.estado === "Mantenimiento programado",
+  ).length;
+
   const caex = equipos.filter((equipo) => equipo.tipo === "CAEX");
 
   const equipoBackup = equipos.find(
@@ -690,6 +1147,10 @@ function App() {
   function irAInicio() {
     setEquipoSeleccionado(null);
     setAveriaSeleccionadaId(null);
+    setMantenimientoSeleccionadoId(null);
+    setMotivoMantenimiento("");
+    setResponsableMantenimiento("");
+    setTrabajoMantenimiento("");
     setVista("inicio");
   }
 
@@ -707,6 +1168,232 @@ function App() {
     setVista("inicio");
   }
 
+  function comenzarMantenimiento() {
+    if (!exigirPermiso()) {
+      return;
+    }
+
+    setEquipoSeleccionado(null);
+    setMotivoMantenimiento("");
+    setResponsableMantenimiento("");
+    setVista("seleccionar-equipo-mantenimiento");
+  }
+
+  function cancelarMantenimiento() {
+    setEquipoSeleccionado(null);
+    setMantenimientoSeleccionadoId(null);
+    setMotivoMantenimiento("");
+    setResponsableMantenimiento("");
+    setTrabajoMantenimiento("");
+    setVista("inicio");
+  }
+
+  function obtenerMantenimientoActivo(numeroMina: string) {
+    return mantenimientosEnCurso.find(
+      (mantenimiento) => mantenimiento.equipo.numeroMina === numeroMina,
+    );
+  }
+
+  function seleccionarEquipoParaMantenimiento(equipo: Equipo) {
+    const averiaAbierta = obtenerAveriaAbierta(equipo.numeroMina);
+    const mantenimientoActivo = obtenerMantenimientoActivo(equipo.numeroMina);
+
+    if (averiaAbierta) {
+      alert(`El equipo ${equipo.numeroMina} tiene una avería abierta y no puede iniciar mantenimiento programado.`);
+      return;
+    }
+
+    if (mantenimientoActivo) {
+      alert(`El equipo ${equipo.numeroMina} ya tiene un mantenimiento programado en curso.`);
+      return;
+    }
+
+    if (equipo.estado !== "Operativo") {
+      alert(`El equipo ${equipo.numeroMina} no está disponible para iniciar mantenimiento programado. Estado actual: ${equipo.estado}.`);
+      return;
+    }
+
+    setEquipoSeleccionado(equipo);
+  }
+
+  function continuarConMantenimiento() {
+    if (equipoSeleccionado) {
+      setVista("registrar-mantenimiento");
+    }
+  }
+
+  async function iniciarMantenimientoProgramado() {
+    if (!exigirPermiso() || !equipoSeleccionado) {
+      return;
+    }
+
+    const motivo = motivoMantenimiento.trim();
+    const responsable = responsableMantenimiento.trim();
+
+    if (!motivo) {
+      alert("Ingresa el motivo del mantenimiento programado.");
+      return;
+    }
+
+    if (!responsable) {
+      alert("Ingresa el nombre del responsable del mantenimiento.");
+      return;
+    }
+
+    if (obtenerAveriaAbierta(equipoSeleccionado.numeroMina)) {
+      alert(`El equipo ${equipoSeleccionado.numeroMina} tiene una avería abierta.`);
+      return;
+    }
+
+    if (obtenerMantenimientoActivo(equipoSeleccionado.numeroMina)) {
+      alert(`El equipo ${equipoSeleccionado.numeroMina} ya tiene un mantenimiento programado en curso.`);
+      return;
+    }
+
+    try {
+      const { data: equipoDb, error: errorEquipo } = await supabase
+        .from("equipos")
+        .select("id, estado")
+        .eq("numero_mina", equipoSeleccionado.numeroMina)
+        .single();
+
+      if (errorEquipo || !equipoDb) {
+        console.error(errorEquipo);
+        alert("No se pudo encontrar el equipo en Supabase.");
+        return;
+      }
+
+      if (equipoDb.estado !== "Operativo") {
+        alert(`El equipo ${equipoSeleccionado.numeroMina} ya no está operativo. Recarga los datos e inténtalo nuevamente.`);
+        await cargarEquipos();
+        return;
+      }
+
+      const { error: errorMantenimiento } = await supabase
+        .from("mantenimientos")
+        .insert({
+          equipo_id: equipoDb.id,
+          motivo,
+          responsable,
+          estado: "En curso",
+        });
+
+      if (errorMantenimiento) {
+        console.error(errorMantenimiento);
+        if (errorMantenimiento.code === "23505") {
+          alert(`El equipo ${equipoSeleccionado.numeroMina} ya tiene un mantenimiento activo.`);
+        } else {
+          alert("No se pudo iniciar el mantenimiento programado.");
+        }
+        return;
+      }
+
+      const { error: errorActualizarEquipo } = await supabase
+        .from("equipos")
+        .update({
+          estado: "Mantenimiento programado",
+          es_backup: false,
+        })
+        .eq("id", equipoDb.id);
+
+      if (errorActualizarEquipo) {
+        console.error(errorActualizarEquipo);
+        alert("El mantenimiento fue creado, pero no se pudo actualizar el estado del equipo.");
+        return;
+      }
+
+      if (numeroBackup === equipoSeleccionado.numeroMina) {
+        const { error: errorBackup } = await supabase
+          .from("configuracion")
+          .update({ valor: null })
+          .eq("clave", "caex_backup");
+
+        if (errorBackup) {
+          console.error(errorBackup);
+        }
+
+        setNumeroBackup(null);
+        alert(`El CAEX ${equipoSeleccionado.numeroMina} era el backup y entró a mantenimiento programado. Actualmente no hay backup asignado.`);
+      }
+
+      await Promise.all([
+        cargarMantenimientos(),
+        cargarEquipos(),
+        cargarBackup(),
+      ]);
+
+      setEquipoSeleccionado(null);
+      setMotivoMantenimiento("");
+      setResponsableMantenimiento("");
+      setVista("inicio");
+    } catch (error) {
+      console.error(error);
+      alert("Ocurrió un error inesperado al iniciar el mantenimiento.");
+    }
+  }
+
+  function abrirDetalleMantenimiento(id: number) {
+    setMantenimientoSeleccionadoId(id);
+    setTrabajoMantenimiento("");
+    setVista("detalle-mantenimiento");
+  }
+
+  async function finalizarMantenimientoProgramado() {
+    if (!exigirPermiso() || !mantenimientoSeleccionado) {
+      return;
+    }
+
+    const trabajo = trabajoMantenimiento.trim();
+
+    if (!trabajo) {
+      alert("Ingresa el trabajo realizado durante el mantenimiento.");
+      return;
+    }
+
+    try {
+      const fechaFin = new Date().toISOString();
+
+      const { error: errorMantenimiento } = await supabase
+        .from("mantenimientos")
+        .update({
+          estado: "Finalizado",
+          trabajo_realizado: trabajo,
+          fecha_fin: fechaFin,
+          updated_at: fechaFin,
+        })
+        .eq("id", mantenimientoSeleccionado.id);
+
+      if (errorMantenimiento) {
+        console.error(errorMantenimiento);
+        alert("No se pudo finalizar el mantenimiento en Supabase.");
+        return;
+      }
+
+      const { error: errorEquipo } = await supabase
+        .from("equipos")
+        .update({ estado: "Operativo" })
+        .eq("numero_mina", mantenimientoSeleccionado.equipo.numeroMina);
+
+      if (errorEquipo) {
+        console.error(errorEquipo);
+        alert("El mantenimiento se cerró, pero no se pudo restaurar el equipo a Operativo.");
+        return;
+      }
+
+      await Promise.all([
+        cargarMantenimientos(),
+        cargarEquipos(),
+      ]);
+
+      setMantenimientoSeleccionadoId(null);
+      setTrabajoMantenimiento("");
+      setVista("inicio");
+    } catch (error) {
+      console.error(error);
+      alert("Ocurrió un error al finalizar el mantenimiento.");
+    }
+  }
+
   function continuarConEquipo() {
     if (equipoSeleccionado) {
       setVista("registrar-averia");
@@ -721,6 +1408,17 @@ function App() {
 
   function seleccionarEquipoParaAveria(equipo: Equipo) {
     const averiaAbierta = obtenerAveriaAbierta(equipo.numeroMina);
+    const mantenimientoActivo = obtenerMantenimientoActivo(equipo.numeroMina);
+
+    if (mantenimientoActivo || equipo.estado === "Mantenimiento programado") {
+      alert(`El equipo ${equipo.numeroMina} está en mantenimiento programado y no puede recibir una nueva avería desde este flujo.`);
+      return;
+    }
+
+    if (equipo.estado !== "Operativo" && !averiaAbierta) {
+      alert(`El equipo ${equipo.numeroMina} no está disponible para publicar una nueva avería. Estado actual: ${equipo.estado}.`);
+      return;
+    }
 
     if (averiaAbierta) {
       const abrir = window.confirm(
@@ -779,6 +1477,14 @@ function App() {
       return;
     }
 
+    // Marcamos temporalmente esta publicación como local para que
+    // este mismo dispositivo no se alerte a sí mismo por Realtime.
+    averiaLocalPendienteRef.current = {
+      equipoId: equipoDb.id,
+      sistema: datos.sistema,
+      vence: Date.now() + 15_000,
+    };
+
     // 2. Crear la avería en Supabase
     const { data: averiaDb, error: errorAveria } = await supabase
       .from("averias")
@@ -795,6 +1501,7 @@ function App() {
       .single();
 
     if (errorAveria || !averiaDb) {
+      averiaLocalPendienteRef.current = null;
       console.error(errorAveria);
 
       if (errorAveria?.code === "23505") {
@@ -932,6 +1639,7 @@ function App() {
               estadoAveria: "En atención",
               estadoEquipo: "En atención",
               tomadaPor: responsable,
+              fechaAtencion,
               horaAtencion,
             }
           : averia,
@@ -1019,6 +1727,7 @@ function App() {
               estadoAveria: "Cerrada",
               estadoEquipo: "Operativo",
               trabajoRealizado,
+              fechaCierre,
               horaCierre,
             }
           : averia,
@@ -1135,6 +1844,7 @@ function App() {
       await Promise.all([
         cargarEquipos(),
         cargarAverias(),
+        cargarMantenimientos(),
         cargarBackup(),
       ]);
       alert("Datos sincronizados con Supabase.");
@@ -2607,7 +3317,133 @@ function App() {
         .read-only-mode .attention-panel {
           display: none !important;
         }
+
+        .new-fault-alert {
+          position: fixed;
+          z-index: 1000;
+          top: 18px;
+          left: 50%;
+          width: min(460px, calc(100% - 28px));
+          transform: translateX(-50%);
+          box-sizing: border-box;
+          padding: 16px 16px 15px;
+          border: 1px solid rgba(239, 68, 68, 0.42);
+          border-left: 5px solid #ef2b2d;
+          border-radius: 16px;
+          background: rgba(255, 255, 255, 0.98);
+          box-shadow: 0 18px 48px rgba(29, 42, 63, 0.24);
+          animation: newFaultAlertIn 220ms ease-out;
+        }
+
+        .new-fault-alert-top {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 14px;
+        }
+
+        .new-fault-alert-kicker {
+          margin: 0 0 3px;
+          color: #d51f2a;
+          font-size: 11px;
+          font-weight: 900;
+          letter-spacing: 1.4px;
+          text-transform: uppercase;
+        }
+
+        .new-fault-alert h3 {
+          margin: 0;
+          color: #172238;
+          font-size: 20px;
+        }
+
+        .new-fault-alert p {
+          margin: 7px 0 0;
+          color: #52627a;
+          font-size: 14px;
+          line-height: 1.4;
+        }
+
+        .new-fault-alert-close {
+          flex: 0 0 auto;
+          width: 34px;
+          height: 34px;
+          border: 0;
+          border-radius: 10px;
+          background: #f2f5f9;
+          color: #52627a;
+          font: inherit;
+          font-size: 20px;
+          cursor: pointer;
+        }
+
+        .new-fault-alert-action {
+          width: 100%;
+          margin-top: 12px;
+          border: 0;
+          border-radius: 11px;
+          padding: 11px 14px;
+          background: #e9272e;
+          color: #ffffff;
+          font: inherit;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        @keyframes newFaultAlertIn {
+          from {
+            opacity: 0;
+            transform: translate(-50%, -12px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
+        }
       `}</style>
+
+      {alertaNuevaAveria && (
+        <aside
+          className="new-fault-alert"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="new-fault-alert-top">
+            <div>
+              <p className="new-fault-alert-kicker">Nueva avería</p>
+              <h3>Equipo {alertaNuevaAveria.numeroMina}</h3>
+              <p>
+                Sistema: <strong>{alertaNuevaAveria.sistema}</strong>
+                <br />
+                Informado por: {alertaNuevaAveria.informadoPor}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="new-fault-alert-close"
+              onClick={cerrarAlertaNuevaAveria}
+              aria-label="Cerrar alerta"
+            >
+              ×
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="new-fault-alert-action"
+            onClick={() => {
+              const id = alertaNuevaAveria.id;
+              cerrarAlertaNuevaAveria();
+              setAveriaSeleccionadaId(id);
+              setVista("detalle-averia");
+            }}
+          >
+            Ver avería
+          </button>
+        </aside>
+      )}
+
       <header className="app-header roac-header-background">
         {/* TURNO: DÍA / NOCHE */}
         <div className="header-overlay-shift">
@@ -2674,6 +3510,11 @@ function App() {
               <strong>{equiposFueraServicio}</strong>
               <span>Fuera de servicio</span>
             </div>
+
+            <div className="summary-item summary-maintenance">
+              <strong>{equiposEnMantenimiento}</strong>
+              <span>Mantenimiento</span>
+            </div>
           </section>
 
           <section className="backup-card">
@@ -2713,13 +3554,53 @@ function App() {
           </section>
 
           {puedeModificar && (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={comenzarRegistro}
-            >
-              + Publicar avería
-            </button>
+            <div className="home-action-grid">
+              <button
+                type="button"
+                className="primary-button"
+                onClick={comenzarRegistro}
+              >
+                + Publicar avería
+              </button>
+
+              <button
+                type="button"
+                className="maintenance-button"
+                onClick={comenzarMantenimiento}
+              >
+                + Mantenimiento programado
+              </button>
+            </div>
+          )}
+
+          {mantenimientosEnCurso.length > 0 && (
+            <section className="section">
+              <div className="section-title">
+                <h2>Mantenimientos en curso</h2>
+                <span>{mantenimientosEnCurso.length}</span>
+              </div>
+
+              <div className="maintenance-list">
+                {mantenimientosEnCurso.map((mantenimiento) => (
+                  <button
+                    type="button"
+                    className="maintenance-card"
+                    key={mantenimiento.id}
+                    onClick={() => abrirDetalleMantenimiento(mantenimiento.id)}
+                  >
+                    <div>
+                      <strong>{mantenimiento.equipo.numeroMina}</strong>
+                      <span> ({mantenimiento.equipo.numeroInterno})</span>
+                    </div>
+                    <small>{mantenimiento.equipo.modelo}</small>
+                    <p>{mantenimiento.motivo}</p>
+                    <span className="maintenance-meta">
+                      Inicio {mantenimiento.horaInicio} · {mantenimiento.responsable}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
           )}
 
           <section className="section">
@@ -2904,56 +3785,712 @@ function App() {
           )}
         </section>
       )}
-
-      {vista === "status" && (
+{vista === "status" && (
         <section className="status-screen">
           <p className="eyebrow eyebrow-dark">
-            Resumen del turno
+            Resumen operacional
           </p>
 
-          <h2>Status turno {turnoActual.tipo.toLowerCase()}</h2>
+          <h2>Status turno {turnoActual.tipo}</h2>
 
           <p className="shift-date">
-            Rango del turno: {turnoActual.rangoTurno}
+            {turnoActual.rangoTurno}
           </p>
 
           <div className="status-summary-card">
-            <p>
-              <span>CAEX operativos en mina</span>
-              <strong>{caexOperativosEnMina}</strong>
+            <div className="status-summary-section">
+              <div
+                style={{
+                  padding: "2px 0 8px",
+                  color: "#53647d",
+                  fontSize: "11px",
+                  fontWeight: 900,
+                  letterSpacing: "1.2px",
+                  textTransform: "uppercase",
+                }}
+              >
+                Estado operacional
+              </div>
+
+              <p>
+                <span>CAEX operativos en mina</span>
+                <strong>{caexOperativosEnMina}</strong>
+              </p>
+
+              <p>
+                <span>CAEX backup</span>
+                <strong>
+                  {equipoBackup
+                    ? equipoBackup.numeroMina
+                    : "Sin backup"}
+                </strong>
+              </p>
+
+              <p>
+                <span>Equipos operativos</span>
+                <strong>{equiposOperativos}</strong>
+              </p>
+
+              <p>
+                <span>Equipos en atención</span>
+                <strong>{equiposEnAtencion}</strong>
+              </p>
+
+              <p>
+                <span>Fuera de servicio</span>
+                <strong>{equiposFueraServicio}</strong>
+              </p>
+
+              <p>
+                <span>Mantenimiento programado</span>
+                <strong>{mantenimientosEnCurso.length}</strong>
+              </p>
+            </div>
+
+            <div
+              className="status-summary-section"
+              style={{ marginTop: "18px" }}
+            >
+              <div
+                style={{
+                  padding: "0 0 8px",
+                  color: "#c62828",
+                  fontSize: "11px",
+                  fontWeight: 900,
+                  letterSpacing: "1.2px",
+                  textTransform: "uppercase",
+                }}
+              >
+                Averías
+              </div>
+
+              <p>
+                <span>Iniciadas en este turno</span>
+                <strong>{averiasDelTurno.length}</strong>
+              </p>
+
+              <p>
+                <span>Recibidas del turno anterior</span>
+                <strong>{averiasHeredadas.length}</strong>
+              </p>
+
+              <p>
+                <span>Cerradas durante este turno</span>
+                <strong>{averiasCerradasEnTurno.length}</strong>
+              </p>
+            </div>
+
+            <div
+              className="status-summary-section"
+              style={{ marginTop: "18px" }}
+            >
+              <div
+                style={{
+                  padding: "0 0 8px",
+                  color: "#5546e8",
+                  fontSize: "11px",
+                  fontWeight: 900,
+                  letterSpacing: "1.2px",
+                  textTransform: "uppercase",
+                }}
+              >
+                Mantenimientos
+              </div>
+
+              <p>
+                <span>Iniciados en este turno</span>
+                <strong>{mantenimientosDelTurno.length}</strong>
+              </p>
+
+              <p>
+                <span>Recibidos del turno anterior</span>
+                <strong>{mantenimientosHeredados.length}</strong>
+              </p>
+
+              <p>
+                <span>Finalizados en este turno</span>
+                <strong>{mantenimientosFinalizadosEnTurno.length}</strong>
+              </p>
+            </div>
+          </div>
+
+          {averiasHeredadas.length > 0 && (
+            <div style={{ marginTop: "24px" }}>
+              <p className="eyebrow eyebrow-dark">
+                Recibidas del turno anterior
+              </p>
+
+              <div className="open-faults">
+                {averiasHeredadas.map((averia) => {
+                  const cierreEnEsteTurno =
+                    Boolean(averia.fechaCierre) &&
+                    fechaDentroDelTurno(
+                      averia.fechaCierre,
+                      turnoActual,
+                    );
+
+                  const turnoSiguiente =
+                    turnoActual.tipo === "Noche"
+                      ? "Día"
+                      : "Noche";
+
+                  const enEntregaTurno =
+                    esMinutoEntregaTurno();
+
+                  const tiempoFueraServicio =
+                    cierreEnEsteTurno
+                      ? formatearTiempoFueraServicio(
+                          averia.fechaAviso,
+                          averia.fechaCierre,
+                        )
+                      : "";
+
+                  return (
+                    <div
+                      className="fault-card"
+                      key={`heredada-${averia.id}`}
+                    >
+                      <div className="fault-card-header">
+                        <div>
+                          <h3>
+                            {averia.equipo.numeroMina} (
+                            {averia.equipo.numeroInterno})
+                          </h3>
+
+                          <p>{averia.equipo.modelo}</p>
+                        </div>
+
+                        <span className="fault-badge">
+                          {averia.estadoAveria === "Cerrada"
+                            ? "Operativo"
+                            : "HEREDADA"}
+                        </span>
+                      </div>
+
+                      <p className="fault-type">
+                        Sistema: {averia.sistema}
+                      </p>
+
+                      <p>
+                        Detención original:{" "}
+                        <strong>{averia.horaAviso}</strong>
+                      </p>
+
+                      {averia.fechaAtencion && (
+                        <p>
+                          Inicio atención:{" "}
+                          <strong>{averia.horaAtencion}</strong>
+                        </p>
+                      )}
+
+                      {averia.tomadaPor && (
+                        <p>
+                          Técnico:{" "}
+                          <strong>{averia.tomadaPor}</strong>
+                        </p>
+                      )}
+
+                      {cierreEnEsteTurno && (
+                        <>
+                          <p>
+                            Operativo:{" "}
+                            <strong>{averia.horaCierre}</strong>
+                          </p>
+
+                          {tiempoFueraServicio && (
+                            <div
+                              style={{
+                                margin: "12px 0",
+                                padding: "12px 14px",
+                                borderRadius: "12px",
+                                background: "#eef6ff",
+                                border: "1px solid #bad8ff",
+                                textAlign: "center",
+                              }}
+                            >
+                              <small
+                                style={{
+                                  display: "block",
+                                  fontWeight: 800,
+                                  letterSpacing: "0.7px",
+                                  color: "#42617f",
+                                }}
+                              >
+                                TIEMPO FUERA DE SERVICIO
+                              </small>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginTop: "4px",
+                                  fontSize: "18px",
+                                  color: "#0c3f73",
+                                }}
+                              >
+                                {tiempoFueraServicio}
+                              </strong>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {cierreEnEsteTurno &&
+                        averia.trabajoRealizado && (
+                          <p className="fault-description">
+                            Trabajo realizado:{" "}
+                            {averia.trabajoRealizado}
+                          </p>
+                        )}
+
+                      {!cierreEnEsteTurno &&
+                        averia.estadoAveria === "Publicada" && (
+                          <>
+                            <p>
+                              <strong>
+                                {enEntregaTurno
+                                  ? `Equipo queda fuera de servicio, sin atención. Pendiente para turno ${turnoSiguiente}.`
+                                  : "Equipo sin atención."}
+                              </strong>
+                            </p>
+
+                            {!enEntregaTurno && (
+                              <p>
+                                Fuera de servicio desde{" "}
+                                <strong>{averia.horaAviso}</strong>
+                              </p>
+                            )}
+                          </>
+                        )}
+
+                      {!cierreEnEsteTurno &&
+                        averia.estadoAveria === "En atención" && (
+                          <p>
+                            <strong>
+                              {enEntregaTurno
+                                ? `Equipo queda fuera de servicio con atención en curso. Continúa intervención en turno ${turnoSiguiente}.`
+                                : "Atención en curso."}
+                            </strong>
+                          </p>
+                        )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: "24px" }}>
+            <p className="eyebrow eyebrow-dark">
+              Averías del turno
             </p>
 
-            <p>
-              <span>CAEX backup</span>
-              <strong>
-                {equipoBackup ? equipoBackup.numeroMina : "Sin backup"}
-              </strong>
+            {averiasDelTurno.length === 0 ? (
+              <p className="empty-state">
+                No se han registrado averías durante este turno.
+              </p>
+            ) : (
+              <div className="open-faults">
+                {averiasDelTurno.map((averia) => {
+                  const turnoSiguiente =
+                    turnoActual.tipo === "Noche"
+                      ? "Día"
+                      : "Noche";
+
+                  const enEntregaTurno =
+                    esMinutoEntregaTurno();
+
+                  const tiempoFueraServicio =
+                    averia.estadoAveria === "Cerrada"
+                      ? formatearTiempoFueraServicio(
+                          averia.fechaAviso,
+                          averia.fechaCierre,
+                        )
+                      : "";
+
+                  return (
+                    <div
+                      className="fault-card"
+                      key={`turno-${averia.id}`}
+                    >
+                      <div className="fault-card-header">
+                        <div>
+                          <h3>
+                            {averia.equipo.numeroMina} (
+                            {averia.equipo.numeroInterno})
+                          </h3>
+
+                          <p>{averia.equipo.modelo}</p>
+                        </div>
+
+                        <span className="fault-badge">
+                          {averia.estadoAveria === "Cerrada"
+                            ? "Operativo"
+                            : averia.estadoAveria}
+                        </span>
+                      </div>
+
+                      <p className="fault-type">
+                        Sistema: {averia.sistema}
+                      </p>
+
+                      {averia.ubicacion && (
+                        <p>Ubicación: {averia.ubicacion}</p>
+                      )}
+
+                      {averia.detalleInicial && (
+                        <p className="fault-description">
+                          {averia.detalleInicial}
+                        </p>
+                      )}
+
+                      <p>
+                        Detención:{" "}
+                        <strong>{averia.horaAviso}</strong>
+                      </p>
+
+                      {averia.fechaAtencion && (
+                        <p>
+                          Atención:{" "}
+                          <strong>{averia.horaAtencion}</strong>
+                        </p>
+                      )}
+
+                      {averia.tomadaPor && (
+                        <p>
+                          Técnico:{" "}
+                          <strong>{averia.tomadaPor}</strong>
+                        </p>
+                      )}
+
+                      {averia.estadoAveria === "Cerrada" && (
+                        <>
+                          <p>
+                            Operativo:{" "}
+                            <strong>{averia.horaCierre}</strong>
+                          </p>
+
+                          {tiempoFueraServicio && (
+                            <div
+                              style={{
+                                margin: "12px 0",
+                                padding: "12px 14px",
+                                borderRadius: "12px",
+                                background: "#eef6ff",
+                                border: "1px solid #bad8ff",
+                                textAlign: "center",
+                              }}
+                            >
+                              <small
+                                style={{
+                                  display: "block",
+                                  fontWeight: 800,
+                                  letterSpacing: "0.7px",
+                                  color: "#42617f",
+                                }}
+                              >
+                                TIEMPO FUERA DE SERVICIO
+                              </small>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginTop: "4px",
+                                  fontSize: "18px",
+                                  color: "#0c3f73",
+                                }}
+                              >
+                                {tiempoFueraServicio}
+                              </strong>
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {averia.estadoAveria === "Cerrada" &&
+                        averia.trabajoRealizado && (
+                          <p className="fault-description">
+                            Trabajo realizado:{" "}
+                            {averia.trabajoRealizado}
+                          </p>
+                        )}
+
+                      {averia.estadoAveria === "Publicada" && (
+                        <>
+                          <p>
+                            <strong>
+                              {enEntregaTurno
+                                ? `Equipo queda fuera de servicio, sin atención. Pendiente para turno ${turnoSiguiente}.`
+                                : "Equipo sin atención."}
+                            </strong>
+                          </p>
+
+                          {!enEntregaTurno && (
+                            <p>
+                              Fuera de servicio desde{" "}
+                              <strong>{averia.horaAviso}</strong>
+                            </p>
+                          )}
+                        </>
+                      )}
+
+                      {averia.estadoAveria === "En atención" && (
+                        <p>
+                          <strong>
+                            {enEntregaTurno
+                              ? `Equipo queda fuera de servicio con atención en curso. Continúa intervención en turno ${turnoSiguiente}.`
+                              : "Atención en curso."}
+                          </strong>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {mantenimientosHeredados.length > 0 && (
+            <div style={{ marginTop: "24px" }}>
+              <p className="eyebrow eyebrow-dark">
+                Mantenimientos recibidos del turno anterior
+              </p>
+
+              <div className="open-faults">
+                {mantenimientosHeredados.map((mantenimiento) => {
+                  const finalizadoEnEsteTurno =
+                    Boolean(mantenimiento.fechaFin) &&
+                    fechaDentroDelTurno(
+                      mantenimiento.fechaFin,
+                      turnoActual,
+                    );
+
+                  const duracion =
+                    finalizadoEnEsteTurno
+                      ? formatearTiempoFueraServicio(
+                          mantenimiento.fechaInicio,
+                          mantenimiento.fechaFin,
+                        )
+                      : "";
+
+                  return (
+                    <div
+                      className="fault-card"
+                      key={`mantenimiento-heredado-${mantenimiento.id}`}
+                      style={{ borderLeftColor: "#6366f1" }}
+                    >
+                      <div className="fault-card-header">
+                        <div>
+                          <h3>
+                            {mantenimiento.equipo.numeroMina} (
+                            {mantenimiento.equipo.numeroInterno})
+                          </h3>
+                          <p>{mantenimiento.equipo.modelo}</p>
+                        </div>
+
+                        <span className="maintenance-state-badge">
+                          {finalizadoEnEsteTurno
+                            ? "Operativo"
+                            : "HEREDADO"}
+                        </span>
+                      </div>
+
+                      <p className="fault-type">
+                        Mantenimiento programado
+                      </p>
+
+                      <p className="fault-description">
+                        {mantenimiento.motivo}
+                      </p>
+
+                      <p>
+                        Inicio original: {" "}
+                        <strong>{mantenimiento.horaInicio}</strong>
+                      </p>
+
+                      <p>
+                        Responsable: {" "}
+                        <strong>{mantenimiento.responsable}</strong>
+                      </p>
+
+                      {finalizadoEnEsteTurno ? (
+                        <>
+                          <p>
+                            Operativo: {" "}
+                            <strong>{mantenimiento.horaFin}</strong>
+                          </p>
+
+                          {duracion && (
+                            <div
+                              style={{
+                                margin: "12px 0",
+                                padding: "12px 14px",
+                                borderRadius: "12px",
+                                background: "#eef2ff",
+                                border: "1px solid #c7d2fe",
+                                textAlign: "center",
+                              }}
+                            >
+                              <small
+                                style={{
+                                  display: "block",
+                                  fontWeight: 800,
+                                  letterSpacing: "0.7px",
+                                  color: "#4f46e5",
+                                }}
+                              >
+                                TIEMPO EN MANTENIMIENTO
+                              </small>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginTop: "4px",
+                                  fontSize: "18px",
+                                  color: "#3730a3",
+                                }}
+                              >
+                                {duracion}
+                              </strong>
+                            </div>
+                          )}
+
+                          {mantenimiento.trabajoRealizado && (
+                            <p className="fault-description">
+                              Trabajo realizado: {" "}
+                              {mantenimiento.trabajoRealizado}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <p>
+                          <strong>
+                            Continúa en mantenimiento programado.
+                          </strong>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: "24px" }}>
+            <p className="eyebrow eyebrow-dark">
+              Mantenimientos programados del turno
             </p>
 
-            <p>
-              <span>Equipos operativos</span>
-              <strong>{equiposOperativos}</strong>
-            </p>
+            {mantenimientosDelTurno.length === 0 ? (
+              <p className="empty-state">
+                No se han iniciado mantenimientos programados durante este turno.
+              </p>
+            ) : (
+              <div className="open-faults">
+                {mantenimientosDelTurno.map((mantenimiento) => {
+                  const duracion =
+                    mantenimiento.estado === "Finalizado" &&
+                    mantenimiento.fechaFin
+                      ? formatearTiempoFueraServicio(
+                          mantenimiento.fechaInicio,
+                          mantenimiento.fechaFin,
+                        )
+                      : "";
 
-            <p>
-              <span>Equipos en atención</span>
-              <strong>{equiposEnAtencion}</strong>
-            </p>
+                  return (
+                    <div
+                      className="fault-card"
+                      key={`mantenimiento-turno-${mantenimiento.id}`}
+                      style={{ borderLeftColor: "#6366f1" }}
+                    >
+                      <div className="fault-card-header">
+                        <div>
+                          <h3>
+                            {mantenimiento.equipo.numeroMina} (
+                            {mantenimiento.equipo.numeroInterno})
+                          </h3>
+                          <p>{mantenimiento.equipo.modelo}</p>
+                        </div>
 
-            <p>
-              <span>Fuera de servicio</span>
-              <strong>{equiposFueraServicio}</strong>
-            </p>
+                        <span className="maintenance-state-badge">
+                          {mantenimiento.estado === "Finalizado"
+                            ? "Operativo"
+                            : "En curso"}
+                        </span>
+                      </div>
 
-            <p>
-              <span>Averías abiertas</span>
-              <strong>{averiasAbiertas.length}</strong>
-            </p>
+                      <p className="fault-type">
+                        Mantenimiento programado
+                      </p>
 
-            <p>
-              <span>Averías cerradas</span>
-              <strong>{averiasCerradas.length}</strong>
-            </p>
+                      <p className="fault-description">
+                        {mantenimiento.motivo}
+                      </p>
+
+                      <p>
+                        Inicio: {" "}
+                        <strong>{mantenimiento.horaInicio}</strong>
+                      </p>
+
+                      <p>
+                        Responsable: {" "}
+                        <strong>{mantenimiento.responsable}</strong>
+                      </p>
+
+                      {mantenimiento.estado === "En curso" ? (
+                        <p>
+                          <strong>Mantenimiento en curso.</strong>
+                        </p>
+                      ) : (
+                        <>
+                          <p>
+                            Operativo: {" "}
+                            <strong>{mantenimiento.horaFin}</strong>
+                          </p>
+
+                          {duracion && (
+                            <div
+                              style={{
+                                margin: "12px 0",
+                                padding: "12px 14px",
+                                borderRadius: "12px",
+                                background: "#eef2ff",
+                                border: "1px solid #c7d2fe",
+                                textAlign: "center",
+                              }}
+                            >
+                              <small
+                                style={{
+                                  display: "block",
+                                  fontWeight: 800,
+                                  letterSpacing: "0.7px",
+                                  color: "#4f46e5",
+                                }}
+                              >
+                                TIEMPO EN MANTENIMIENTO
+                              </small>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginTop: "4px",
+                                  fontSize: "18px",
+                                  color: "#3730a3",
+                                }}
+                              >
+                                {duracion}
+                              </strong>
+                            </div>
+                          )}
+
+                          {mantenimiento.trabajoRealizado && (
+                            <p className="fault-description">
+                              Trabajo realizado: {" "}
+                              {mantenimiento.trabajoRealizado}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <button
@@ -2963,6 +4500,195 @@ function App() {
           >
             Recargar desde Supabase
           </button>
+        </section>
+      )}
+
+      {vista === "seleccionar-equipo-mantenimiento" && puedeModificar && (
+        <section className="equipment-selector">
+          <div className="form-header">
+            <div>
+              <p className="eyebrow eyebrow-dark">
+                Mantenimiento programado
+              </p>
+              <h2>Selecciona el equipo</h2>
+            </div>
+
+            <button
+              type="button"
+              className="close-button"
+              onClick={cancelarMantenimiento}
+              aria-label="Cancelar mantenimiento"
+            >
+              ×
+            </button>
+          </div>
+
+          <div className="equipment-grid">
+            {equipos.map((equipo) => {
+              const tieneAveria = Boolean(obtenerAveriaAbierta(equipo.numeroMina));
+              const tieneMantenimiento = Boolean(obtenerMantenimientoActivo(equipo.numeroMina));
+              const disponible = equipo.estado === "Operativo" && !tieneAveria && !tieneMantenimiento;
+
+              return (
+                <div className="fault-selection-wrapper" key={equipo.numeroMina}>
+                  {!disponible && (
+                    <span className="maintenance-unavailable-label">
+                      {tieneAveria ? "AVERÍA ABIERTA" : tieneMantenimiento ? "EN MANTENIMIENTO" : equipo.estado.toUpperCase()}
+                    </span>
+                  )}
+
+                  <EquipoCard
+                    numeroMina={equipo.numeroMina}
+                    numeroInterno={equipo.numeroInterno}
+                    modelo={equipo.modelo}
+                    estado={equipo.estado}
+                    seleccionado={equipoSeleccionado?.numeroMina === equipo.numeroMina}
+                    onClick={() => seleccionarEquipoParaMantenimiento(equipo)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {equipoSeleccionado && (
+            <div className="selected-equipment maintenance-selected">
+              <p className="eyebrow">Equipo seleccionado</p>
+              <h3>{equipoSeleccionado.numeroMina}</h3>
+              <p>Interno: <strong>{equipoSeleccionado.numeroInterno}</strong></p>
+              <p>Modelo: <strong>{equipoSeleccionado.modelo}</strong></p>
+              <p>Estado actual: <strong>{equipoSeleccionado.estado}</strong></p>
+
+              <button
+                type="button"
+                className="continue-button"
+                onClick={continuarConMantenimiento}
+              >
+                Continuar
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
+      {vista === "registrar-mantenimiento" && puedeModificar && equipoSeleccionado && (
+        <section className="fault-form maintenance-form">
+          <div className="form-header">
+            <div>
+              <p className="eyebrow eyebrow-dark">Mantenimiento programado</p>
+              <h2>{equipoSeleccionado.numeroMina} ({equipoSeleccionado.numeroInterno})</h2>
+              <p className="equipment-model">{equipoSeleccionado.modelo}</p>
+            </div>
+            <button type="button" className="close-button" onClick={cancelarMantenimiento}>×</button>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="motivoMantenimiento">Motivo / trabajo programado *</label>
+            <textarea
+              id="motivoMantenimiento"
+              value={motivoMantenimiento}
+              onChange={(evento) => setMotivoMantenimiento(evento.target.value)}
+              placeholder="Ejemplo: PM 500 horas, cambio programado de motor..."
+              rows={4}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="responsableMantenimiento">Responsable del mantenimiento *</label>
+            <input
+              id="responsableMantenimiento"
+              className="form-input"
+              value={responsableMantenimiento}
+              onChange={(evento) => setResponsableMantenimiento(evento.target.value)}
+              placeholder="Nombre y apellido"
+            />
+          </div>
+
+          <div className="automatic-data">
+            <p><span>Estado al iniciar</span><strong>Mantenimiento programado</strong></p>
+            <p><span>Hora de inicio</span><strong>Automática</strong></p>
+          </div>
+
+          <button
+            type="button"
+            className="start-maintenance-button"
+            onClick={() => void iniciarMantenimientoProgramado()}
+          >
+            Iniciar mantenimiento programado
+          </button>
+
+          <button
+            type="button"
+            className="secondary-button"
+            onClick={() => setVista("seleccionar-equipo-mantenimiento")}
+          >
+            ← Cambiar equipo
+          </button>
+        </section>
+      )}
+
+      {vista === "detalle-mantenimiento" && mantenimientoSeleccionado && (
+        <section className="fault-detail maintenance-detail">
+          <button
+            type="button"
+            className="back-button"
+            onClick={irAInicio}
+          >
+            ← Volver a inicio
+          </button>
+
+          <div className="detail-header">
+            <div>
+              <p className="eyebrow eyebrow-dark">Mantenimiento programado</p>
+              <h2>{mantenimientoSeleccionado.equipo.numeroMina} ({mantenimientoSeleccionado.equipo.numeroInterno})</h2>
+              <p>{mantenimientoSeleccionado.equipo.modelo}</p>
+            </div>
+            <span className="maintenance-state-badge">{mantenimientoSeleccionado.estado}</span>
+          </div>
+
+          <div className="detail-information maintenance-information">
+            <p><span>Motivo</span><strong>{mantenimientoSeleccionado.motivo}</strong></p>
+            <p><span>Responsable</span><strong>{mantenimientoSeleccionado.responsable}</strong></p>
+            <p><span>Inicio</span><strong>{mantenimientoSeleccionado.horaInicio}</strong></p>
+            {mantenimientoSeleccionado.horaFin && (
+              <p><span>Operativo</span><strong>{mantenimientoSeleccionado.horaFin}</strong></p>
+            )}
+          </div>
+
+          {mantenimientoSeleccionado.estado === "En curso" && puedeModificar && (
+            <div className="attention-panel maintenance-finish-panel">
+              <h3>Finalizar mantenimiento</h3>
+              <label htmlFor="trabajoMantenimiento">Trabajo realizado *</label>
+              <textarea
+                id="trabajoMantenimiento"
+                value={trabajoMantenimiento}
+                onChange={(evento) => setTrabajoMantenimiento(evento.target.value)}
+                placeholder="Describe el trabajo realizado y las pruebas efectuadas"
+                rows={5}
+              />
+              <button
+                type="button"
+                className="finish-maintenance-button"
+                onClick={() => void finalizarMantenimientoProgramado()}
+              >
+                Finalizar mantenimiento y dejar operativo
+              </button>
+            </div>
+          )}
+
+          {mantenimientoSeleccionado.estado === "Finalizado" && (
+            <>
+              <div className="maintenance-duration">
+                <small>TIEMPO EN MANTENIMIENTO PROGRAMADO</small>
+                <strong>{formatearTiempoFueraServicio(mantenimientoSeleccionado.fechaInicio, mantenimientoSeleccionado.fechaFin)}</strong>
+              </div>
+              {mantenimientoSeleccionado.trabajoRealizado && (
+                <div className="detail-block completed-work">
+                  <h3>Trabajo realizado</h3>
+                  <p>{mantenimientoSeleccionado.trabajoRealizado}</p>
+                </div>
+              )}
+            </>
+          )}
         </section>
       )}
 
@@ -3079,7 +4805,10 @@ function App() {
       {vista !== "seleccionar-equipo" &&
         vista !== "registrar-averia" &&
         vista !== "detalle-averia" &&
-        vista !== "seleccionar-backup" && (
+        vista !== "seleccionar-backup" &&
+        vista !== "seleccionar-equipo-mantenimiento" &&
+        vista !== "registrar-mantenimiento" &&
+        vista !== "detalle-mantenimiento" && (
           <nav className="bottom-navigation">
             <button
               type="button"

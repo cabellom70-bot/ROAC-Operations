@@ -18,7 +18,7 @@ function DetalleAveria({
   onCerrar,
 }: DetalleAveriaProps) {
   const [responsable, setResponsable] =
-    useState("Michael");
+  useState("");
 
   const [trabajoRealizado, setTrabajoRealizado] =
     useState("");
@@ -115,16 +115,18 @@ function DetalleAveria({
           <h3>Tomar avería</h3>
 
           <label htmlFor="responsableAtencion">
-            Responsable de la atención
-          </label>
+           Técnico que toma la avería *
+         </label>
 
           <input
-            id="responsableAtencion"
-            className="form-input"
-            value={responsable}
-            onChange={(evento) =>
-              setResponsable(evento.target.value)
-            }
+         id="responsableAtencion"
+         className="form-input"
+         value={responsable}
+         onChange={(evento) =>
+         setResponsable(evento.target.value)
+         }
+  placeholder="Nombre y apellido"
+  required
           />
 
           <button
