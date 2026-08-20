@@ -397,6 +397,10 @@ function App() {
     informadoPor: string;
   } | null>(null);
 
+  // Diagnóstico temporal de Supabase Realtime.
+  // Nos permitirá comprobar desde PC y celular si el canal realmente queda conectado.
+  const [estadoRealtime, setEstadoRealtime] = useState("CONECTANDO");
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const alertaTimeoutRef = useRef<number | null>(null);
   const averiaLocalPendienteRef = useRef<{
@@ -969,6 +973,8 @@ function App() {
       return;
     }
 
+    setEstadoRealtime("CONECTANDO");
+
     const canal = supabase
       .channel("roac-operations-realtime")
       .on(
@@ -979,6 +985,8 @@ function App() {
           table: "averias",
         },
         (payload) => {
+          console.log("[ROAC Realtime] averias:", payload);
+
           void cargarAverias();
 
           if (payload.eventType === "INSERT") {
@@ -1000,7 +1008,8 @@ function App() {
           schema: "public",
           table: "equipos",
         },
-        () => {
+        (payload) => {
+          console.log("[ROAC Realtime] equipos:", payload);
           void cargarEquipos();
         },
       )
@@ -1011,7 +1020,8 @@ function App() {
           schema: "public",
           table: "mantenimientos",
         },
-        () => {
+        (payload) => {
+          console.log("[ROAC Realtime] mantenimientos:", payload);
           void cargarMantenimientos();
         },
       )
@@ -1022,11 +1032,36 @@ function App() {
           schema: "public",
           table: "configuracion",
         },
-        () => {
+        (payload) => {
+          console.log("[ROAC Realtime] configuracion:", payload);
           void cargarBackup();
         },
       )
-      .subscribe();
+      .subscribe((status, error) => {
+        console.log("[ROAC Realtime] estado del canal:", status, error ?? "");
+
+        switch (status) {
+          case "SUBSCRIBED":
+            setEstadoRealtime("CONECTADO");
+            break;
+
+          case "CHANNEL_ERROR":
+            setEstadoRealtime("ERROR");
+            break;
+
+          case "TIMED_OUT":
+            setEstadoRealtime("TIMEOUT");
+            break;
+
+          case "CLOSED":
+            setEstadoRealtime("CERRADO");
+            break;
+
+          default:
+            setEstadoRealtime(status);
+            break;
+        }
+      });
 
     return () => {
       void supabase.removeChannel(canal);
@@ -3443,6 +3478,33 @@ const averiasCerradasEnTurno = averias.filter(
           </button>
         </aside>
       )}
+
+      <div
+        aria-live="polite"
+        title="Diagnóstico temporal de Supabase Realtime"
+        style={{
+          position: "fixed",
+          top: "8px",
+          right: "8px",
+          zIndex: 9999,
+          padding: "6px 10px",
+          borderRadius: "999px",
+          border: "1px solid rgba(255,255,255,0.25)",
+          background:
+            estadoRealtime === "CONECTADO"
+              ? "rgba(0, 124, 73, 0.94)"
+              : estadoRealtime === "CONECTANDO"
+                ? "rgba(145, 100, 0, 0.94)"
+                : "rgba(179, 32, 32, 0.95)",
+          color: "#ffffff",
+          fontSize: "11px",
+          fontWeight: 800,
+          letterSpacing: "0.4px",
+          boxShadow: "0 5px 18px rgba(0,0,0,0.18)",
+        }}
+      >
+        Realtime: {estadoRealtime}
+      </div>
 
       <header className="app-header roac-header-background">
         {/* TURNO: DÍA / NOCHE */}
