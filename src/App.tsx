@@ -44,6 +44,34 @@ type TurnoActual = {
   claveTurno: string;
 };
 
+type ResumenStatusTurno = {
+  caexOperativosEnMina: number;
+  numeroBackup: string | null;
+  equiposOperativos: number;
+  equiposEnAtencion: number;
+  equiposFueraServicio: number;
+  mantenimientosEnCurso: number;
+  averiasIniciadas: number;
+  averiasHeredadas: number;
+  averiasCerradas: number;
+  mantenimientosIniciados: number;
+  mantenimientosHeredados: number;
+  mantenimientosFinalizados: number;
+};
+
+type StatusTurnoGuardado = {
+  id: number;
+  claveTurno: string;
+  tipoTurno: TipoTurno;
+  rangoTurno: string;
+  fechaInicio: string;
+  fechaFin: string;
+  resumen: ResumenStatusTurno;
+  averias: Averia[];
+  mantenimientos: Mantenimiento[];
+  creadoEn: string;
+};
+
 const ZONA_HORARIA_OPERACIONAL = "America/Santiago";
 
 function obtenerPartesChile(fecha: Date) {
@@ -325,6 +353,31 @@ function esMinutoEntregaTurno() {
   );
 }
 
+function formatearFechaHoraChile(fechaIso: string) {
+  if (!fechaIso) {
+    return "";
+  }
+
+  const fecha = new Date(fechaIso);
+
+  if (Number.isNaN(fecha.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat("es-CL", {
+    timeZone: ZONA_HORARIA_OPERACIONAL,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+    .format(fecha)
+    .replace(",", " ·");
+}
+
+
 function formatearTiempoFueraServicio(
   fechaAviso: string,
   fechaCierre: string,
@@ -425,6 +478,11 @@ function App() {
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
     () => obtenerTurnoActual(),
   );
+  const turnoAnteriorRef = useRef<TurnoActual>(turnoActual);
+  const [historialTurnos, setHistorialTurnos] = useState<StatusTurnoGuardado[]>([]);
+  const [claveHistorialAbierto, setClaveHistorialAbierto] = useState<string | null>(null);
+  const [mostrarHistorialCompleto, setMostrarHistorialCompleto] = useState(false);
+  const [datosOperacionalesListos, setDatosOperacionalesListos] = useState(false);
 
   async function cargarPerfil(userId: string) {
     const { data, error } = await supabase
@@ -1168,6 +1226,173 @@ function App() {
   }
 
 
+  async function cargarHistorialTurnos() {
+    const { data, error } = await supabase
+      .from("status_turnos")
+      .select("*")
+      .order("fecha_inicio", { ascending: false })
+      .limit(60);
+
+    if (error) {
+      console.error("Error al cargar historial de turnos:", error);
+      return;
+    }
+
+    const convertidos: StatusTurnoGuardado[] = (data ?? []).map((registro) => ({
+      id: registro.id,
+      claveTurno: registro.clave_turno,
+      tipoTurno: registro.tipo_turno,
+      rangoTurno: registro.rango_turno,
+      fechaInicio: registro.fecha_inicio,
+      fechaFin: registro.fecha_fin,
+      resumen: registro.resumen as ResumenStatusTurno,
+      averias: (registro.averias ?? []) as Averia[],
+      mantenimientos: (registro.mantenimientos ?? []) as Mantenimiento[],
+      creadoEn: registro.created_at,
+    }));
+
+    setHistorialTurnos(convertidos);
+  }
+
+  function obtenerAveriasRelevantesParaTurno(turno: TurnoActual) {
+    const { inicio, fin } = obtenerIntervaloTurno(turno);
+
+    return averias.filter((averia) => {
+      if (!averia.fechaAviso) {
+        return false;
+      }
+
+      const inicioAveria = new Date(averia.fechaAviso);
+      const cierreAveria = averia.fechaCierre
+        ? new Date(averia.fechaCierre)
+        : null;
+
+      return (
+        inicioAveria <= fin &&
+        (!cierreAveria || cierreAveria >= inicio)
+      );
+    });
+  }
+
+  function obtenerMantenimientosRelevantesParaTurno(turno: TurnoActual) {
+    const { inicio, fin } = obtenerIntervaloTurno(turno);
+
+    return mantenimientos.filter((mantenimiento) => {
+      if (!mantenimiento.fechaInicio) {
+        return false;
+      }
+
+      const inicioMantenimiento = new Date(mantenimiento.fechaInicio);
+      const finMantenimiento = mantenimiento.fechaFin
+        ? new Date(mantenimiento.fechaFin)
+        : null;
+
+      return (
+        inicioMantenimiento <= fin &&
+        (!finMantenimiento || finMantenimiento >= inicio)
+      );
+    });
+  }
+
+  function construirResumenTurno(turno: TurnoActual): ResumenStatusTurno {
+    const { inicio } = obtenerIntervaloTurno(turno);
+
+    const averiasIniciadas = averias.filter((averia) =>
+      fechaDentroDelTurno(averia.fechaAviso, turno),
+    );
+
+    const averiasHeredadasTurno = averias.filter((averia) => {
+      if (!averia.fechaAviso) {
+        return false;
+      }
+
+      const fechaAviso = new Date(averia.fechaAviso);
+      const estabaAbiertaAlInicio =
+        !averia.fechaCierre || new Date(averia.fechaCierre) >= inicio;
+
+      return fechaAviso < inicio && estabaAbiertaAlInicio;
+    });
+
+    const averiasCerradasTurno = averias.filter(
+      (averia) =>
+        Boolean(averia.fechaCierre) &&
+        fechaDentroDelTurno(averia.fechaCierre, turno),
+    );
+
+    const mantenimientosIniciados = mantenimientos.filter((mantenimiento) =>
+      fechaDentroDelTurno(mantenimiento.fechaInicio, turno),
+    );
+
+    const mantenimientosHeredadosTurno = mantenimientos.filter((mantenimiento) => {
+      if (!mantenimiento.fechaInicio) {
+        return false;
+      }
+
+      const fechaInicio = new Date(mantenimiento.fechaInicio);
+      const estabaActivoAlInicio =
+        !mantenimiento.fechaFin || new Date(mantenimiento.fechaFin) >= inicio;
+
+      return fechaInicio < inicio && estabaActivoAlInicio;
+    });
+
+    const mantenimientosFinalizados = mantenimientos.filter(
+      (mantenimiento) =>
+        Boolean(mantenimiento.fechaFin) &&
+        fechaDentroDelTurno(mantenimiento.fechaFin, turno),
+    );
+
+    return {
+      caexOperativosEnMina,
+      numeroBackup,
+      equiposOperativos,
+      equiposEnAtencion,
+      equiposFueraServicio,
+      mantenimientosEnCurso: mantenimientosEnCurso.length,
+      averiasIniciadas: averiasIniciadas.length,
+      averiasHeredadas: averiasHeredadasTurno.length,
+      averiasCerradas: averiasCerradasTurno.length,
+      mantenimientosIniciados: mantenimientosIniciados.length,
+      mantenimientosHeredados: mantenimientosHeredadosTurno.length,
+      mantenimientosFinalizados: mantenimientosFinalizados.length,
+    };
+  }
+
+  async function guardarStatusTurno(turno: TurnoActual) {
+    if (rol !== "operaciones") {
+      return;
+    }
+
+    const { inicio, fin } = obtenerIntervaloTurno(turno);
+    const resumen = construirResumenTurno(turno);
+    const averiasTurno = obtenerAveriasRelevantesParaTurno(turno);
+    const mantenimientosTurno = obtenerMantenimientosRelevantesParaTurno(turno);
+
+    const { error } = await supabase
+      .from("status_turnos")
+      .upsert(
+        {
+          clave_turno: turno.claveTurno,
+          tipo_turno: turno.tipo,
+          rango_turno: turno.rangoTurno,
+          fecha_inicio: inicio.toISOString(),
+          fecha_fin: fin.toISOString(),
+          resumen,
+          averias: averiasTurno,
+          mantenimientos: mantenimientosTurno,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "clave_turno" },
+      );
+
+    if (error) {
+      console.error("No se pudo archivar el status del turno:", error);
+      return;
+    }
+
+    await cargarHistorialTurnos();
+  }
+
+
   useEffect(() => {
     function habilitarAudio() {
       try {
@@ -1271,16 +1496,50 @@ function App() {
 
   useEffect(() => {
     if (!sesion || !rol) {
+      setDatosOperacionalesListos(false);
       return;
     }
 
-    void Promise.all([
-      cargarEquipos(),
-      cargarAverias(),
-      cargarMantenimientos(),
-      cargarBackup(),
-    ]);
+    let activo = true;
+
+    async function cargarDatosIniciales() {
+      setDatosOperacionalesListos(false);
+
+      await Promise.all([
+        cargarEquipos(),
+        cargarAverias(),
+        cargarMantenimientos(),
+        cargarBackup(),
+        cargarHistorialTurnos(),
+      ]);
+
+      if (activo) {
+        setDatosOperacionalesListos(true);
+      }
+    }
+
+    void cargarDatosIniciales();
+
+    return () => {
+      activo = false;
+    };
   }, [sesion?.user.id, rol]);
+
+  useEffect(() => {
+    const turnoAnterior = turnoAnteriorRef.current;
+
+    if (turnoAnterior.claveTurno === turnoActual.claveTurno) {
+      return;
+    }
+
+    turnoAnteriorRef.current = turnoActual;
+
+    if (!datosOperacionalesListos || rol !== "operaciones") {
+      return;
+    }
+
+    void guardarStatusTurno(turnoAnterior);
+  }, [turnoActual.claveTurno, datosOperacionalesListos, rol]);
 
   useEffect(() => {
     if (!sesion || !rol) {
@@ -1505,6 +1764,14 @@ const averiasCerradasEnTurno = averias.filter(
       equipo.estado === "Operativo" &&
       equipo.numeroMina !== numeroBackup,
   ).length;
+
+  const historialTurnosCerrados = historialTurnos.filter(
+    (status) => status.claveTurno !== turnoActual.claveTurno,
+  );
+
+  const historialTurnosVisibles = mostrarHistorialCompleto
+    ? historialTurnosCerrados
+    : historialTurnosCerrados.slice(0, 10);
 
   function irAInicio() {
     setEquipoSeleccionado(null);
@@ -2219,6 +2486,7 @@ const averiasCerradasEnTurno = averias.filter(
         cargarAverias(),
         cargarMantenimientos(),
         cargarBackup(),
+        cargarHistorialTurnos(),
       ]);
       alert("Datos sincronizados con Supabase.");
     } catch (error) {
@@ -4489,13 +4757,13 @@ const averiasCerradasEnTurno = averias.filter(
 
                       <p>
                         Detención original:{" "}
-                        <strong>{averia.horaAviso}</strong>
+                        <strong>{formatearFechaHoraChile(averia.fechaAviso)}</strong>
                       </p>
 
                       {averia.fechaAtencion && (
                         <p>
                           Inicio atención:{" "}
-                          <strong>{averia.horaAtencion}</strong>
+                          <strong>{formatearFechaHoraChile(averia.fechaAtencion)}</strong>
                         </p>
                       )}
 
@@ -4510,7 +4778,7 @@ const averiasCerradasEnTurno = averias.filter(
                         <>
                           <p>
                             Operativo:{" "}
-                            <strong>{averia.horaCierre}</strong>
+                            <strong>{formatearFechaHoraChile(averia.fechaCierre)}</strong>
                           </p>
 
                           {tiempoFueraServicio && (
@@ -4571,7 +4839,7 @@ const averiasCerradasEnTurno = averias.filter(
                             {!enEntregaTurno && (
                               <p>
                                 Fuera de servicio desde{" "}
-                                <strong>{averia.horaAviso}</strong>
+                                <strong>{formatearFechaHoraChile(averia.fechaAviso)}</strong>
                               </p>
                             )}
                           </>
@@ -4660,13 +4928,13 @@ const averiasCerradasEnTurno = averias.filter(
 
                       <p>
                         Detención:{" "}
-                        <strong>{averia.horaAviso}</strong>
+                        <strong>{formatearFechaHoraChile(averia.fechaAviso)}</strong>
                       </p>
 
                       {averia.fechaAtencion && (
                         <p>
                           Atención:{" "}
-                          <strong>{averia.horaAtencion}</strong>
+                          <strong>{formatearFechaHoraChile(averia.fechaAtencion)}</strong>
                         </p>
                       )}
 
@@ -4681,7 +4949,7 @@ const averiasCerradasEnTurno = averias.filter(
                         <>
                           <p>
                             Operativo:{" "}
-                            <strong>{averia.horaCierre}</strong>
+                            <strong>{formatearFechaHoraChile(averia.fechaCierre)}</strong>
                           </p>
 
                           {tiempoFueraServicio && (
@@ -4741,7 +5009,7 @@ const averiasCerradasEnTurno = averias.filter(
                           {!enEntregaTurno && (
                             <p>
                               Fuera de servicio desde{" "}
-                              <strong>{averia.horaAviso}</strong>
+                              <strong>{formatearFechaHoraChile(averia.fechaAviso)}</strong>
                             </p>
                           )}
                         </>
@@ -5005,6 +5273,248 @@ const averiasCerradasEnTurno = averias.filter(
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          <div
+            style={{
+              marginTop: "30px",
+              paddingTop: "22px",
+              borderTop: "1px solid #dbe4ef",
+            }}
+          >
+            <p className="eyebrow eyebrow-dark">Historial de turnos</p>
+            <h3 style={{ margin: "4px 0 6px" }}>Status cerrados</h3>
+            <p
+              style={{
+                margin: "0 0 14px",
+                color: "#63748a",
+                fontSize: "13px",
+                lineHeight: 1.45,
+              }}
+            >
+              Cada turno queda archivado de forma independiente para mantener
+              limpio el status actual y usarlo después en el informe PDF.
+            </p>
+
+            {historialTurnosCerrados.length === 0 ? (
+              <p className="empty-state">
+                Aún no hay turnos cerrados archivados. El primero se guardará
+                automáticamente en el próximo cambio de turno.
+              </p>
+            ) : (
+              <div style={{ display: "grid", gap: "10px" }}>
+                {historialTurnosVisibles.map((statusHistorico) => {
+                  const abierto =
+                    claveHistorialAbierto === statusHistorico.claveTurno;
+
+                  return (
+                    <article
+                      key={statusHistorico.claveTurno}
+                      style={{
+                        border: "1px solid #d9e3ef",
+                        borderRadius: "14px",
+                        background: "#ffffff",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setClaveHistorialAbierto(
+                            abierto ? null : statusHistorico.claveTurno,
+                          )
+                        }
+                        style={{
+                          width: "100%",
+                          border: 0,
+                          background: "transparent",
+                          padding: "14px 16px",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "12px",
+                          textAlign: "left",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span>
+                          <strong
+                            style={{
+                              display: "block",
+                              color: "#172b46",
+                              fontSize: "14px",
+                            }}
+                          >
+                            Status turno {statusHistorico.tipoTurno}
+                          </strong>
+                          <small style={{ color: "#6b7b90" }}>
+                            {statusHistorico.rangoTurno}
+                          </small>
+                        </span>
+                        <strong style={{ color: "#40556f" }}>
+                          {abierto ? "−" : "+"}
+                        </strong>
+                      </button>
+
+                      {abierto && (
+                        <div
+                          style={{
+                            padding: "0 16px 16px",
+                            borderTop: "1px solid #edf1f6",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                              gap: "8px",
+                              marginTop: "14px",
+                            }}
+                          >
+                            <div className="status-summary-card">
+                              <small>Averías iniciadas</small>
+                              <strong>{statusHistorico.resumen.averiasIniciadas}</strong>
+                            </div>
+                            <div className="status-summary-card">
+                              <small>Averías cerradas</small>
+                              <strong>{statusHistorico.resumen.averiasCerradas}</strong>
+                            </div>
+                            <div className="status-summary-card">
+                              <small>Heredadas</small>
+                              <strong>{statusHistorico.resumen.averiasHeredadas}</strong>
+                            </div>
+                            <div className="status-summary-card">
+                              <small>Mantenciones</small>
+                              <strong>{statusHistorico.resumen.mantenimientosIniciados}</strong>
+                            </div>
+                          </div>
+
+                          {statusHistorico.averias.length > 0 && (
+                            <div style={{ marginTop: "16px" }}>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginBottom: "8px",
+                                  color: "#213a59",
+                                }}
+                              >
+                                Averías del status
+                              </strong>
+                              <div style={{ display: "grid", gap: "8px" }}>
+                                {statusHistorico.averias.map((averia) => (
+                                  <div
+                                    key={`hist-${statusHistorico.claveTurno}-${averia.id}`}
+                                    style={{
+                                      padding: "10px 12px",
+                                      borderRadius: "10px",
+                                      background: "#f7f9fc",
+                                      border: "1px solid #e5ebf2",
+                                    }}
+                                  >
+                                    <strong>
+                                      {averia.equipo.numeroMina} · {averia.sistema}
+                                    </strong>
+                                    <div
+                                      style={{
+                                        marginTop: "4px",
+                                        color: "#617187",
+                                        fontSize: "12px",
+                                        lineHeight: 1.45,
+                                      }}
+                                    >
+                                      Inicio: {formatearFechaHoraChile(averia.fechaAviso)}
+                                      {averia.fechaAtencion && (
+                                        <>
+                                          <br />
+                                          Atención: {formatearFechaHoraChile(averia.fechaAtencion)}
+                                        </>
+                                      )}
+                                      {averia.fechaCierre && (
+                                        <>
+                                          <br />
+                                          Operativo: {formatearFechaHoraChile(averia.fechaCierre)}
+                                        </>
+                                      )}
+                                      <br />
+                                      Estado: {averia.estadoAveria === "Cerrada" ? "Operativo" : averia.estadoAveria}
+                                    </div>
+                                    {averia.trabajoRealizado && (
+                                      <p
+                                        style={{
+                                          margin: "7px 0 0",
+                                          fontSize: "12px",
+                                          color: "#40536c",
+                                        }}
+                                      >
+                                        Trabajo: {averia.trabajoRealizado}
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {statusHistorico.mantenimientos.length > 0 && (
+                            <div style={{ marginTop: "16px" }}>
+                              <strong
+                                style={{
+                                  display: "block",
+                                  marginBottom: "8px",
+                                  color: "#4338ca",
+                                }}
+                              >
+                                Mantenimientos del status
+                              </strong>
+                              <div style={{ display: "grid", gap: "8px" }}>
+                                {statusHistorico.mantenimientos.map((mantenimiento) => (
+                                  <div
+                                    key={`hist-mant-${statusHistorico.claveTurno}-${mantenimiento.id}`}
+                                    style={{
+                                      padding: "10px 12px",
+                                      borderRadius: "10px",
+                                      background: "#f7f7ff",
+                                      border: "1px solid #e1e2ff",
+                                    }}
+                                  >
+                                    <strong>
+                                      {mantenimiento.equipo.numeroMina} · Mantenimiento programado
+                                    </strong>
+                                    <p
+                                      style={{
+                                        margin: "5px 0 0",
+                                        color: "#5d617a",
+                                        fontSize: "12px",
+                                      }}
+                                    >
+                                      {mantenimiento.motivo}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+
+                {historialTurnosCerrados.length > 10 && (
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() =>
+                      setMostrarHistorialCompleto((valor) => !valor)
+                    }
+                  >
+                    {mostrarHistorialCompleto
+                      ? "Mostrar solo los 10 más recientes"
+                      : `Ver ${historialTurnosCerrados.length - 10} turnos anteriores`}
+                  </button>
+                )}
               </div>
             )}
           </div>
