@@ -401,6 +401,10 @@ function App() {
   // Nos permitirá comprobar desde PC y celular si el canal realmente queda conectado.
   const [estadoRealtime, setEstadoRealtime] = useState("CONECTANDO");
 
+  const [estadoPush, setEstadoPush] = useState<
+    "NO_COMPATIBLE" | "NO_INSTALADA" | "PENDIENTE" | "ACTIVANDO" | "ACTIVA" | "BLOQUEADA" | "ERROR"
+  >("PENDIENTE");
+
   const audioContextRef = useRef<AudioContext | null>(null);
   const alertaTimeoutRef = useRef<number | null>(null);
   const averiaLocalPendienteRef = useRef<{
@@ -512,6 +516,204 @@ function App() {
 
     alert("Este acceso es de solo lectura.");
     return false;
+  }
+
+  function convertirClaveVapid(claveBase64: string) {
+    const relleno = "=".repeat((4 - (claveBase64.length % 4)) % 4);
+    const base64 = (claveBase64 + relleno)
+      .replace(/-/g, "+")
+      .replace(/_/g, "/");
+
+    const datos = window.atob(base64);
+    return Uint8Array.from([...datos].map((caracter) => caracter.charCodeAt(0)));
+  }
+
+  function esIOS() {
+    return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+  }
+
+  function esModoInstalado() {
+    const navegadorIOS = window.navigator as Navigator & {
+      standalone?: boolean;
+    };
+
+    return (
+      window.matchMedia("(display-mode: standalone)").matches ||
+      navegadorIOS.standalone === true
+    );
+  }
+
+  async function comprobarEstadoPush() {
+    if (
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !("Notification" in window)
+    ) {
+      setEstadoPush("NO_COMPATIBLE");
+      return;
+    }
+
+    if (esIOS() && !esModoInstalado()) {
+      setEstadoPush("NO_INSTALADA");
+      return;
+    }
+
+    if (Notification.permission === "denied") {
+      setEstadoPush("BLOQUEADA");
+      return;
+    }
+
+    try {
+      const registro = await navigator.serviceWorker.register("/sw.js");
+      const suscripcion = await registro.pushManager.getSubscription();
+
+      setEstadoPush(
+        suscripcion && Notification.permission === "granted"
+          ? "ACTIVA"
+          : "PENDIENTE",
+      );
+    } catch (error) {
+      console.error("Error comprobando Web Push:", error);
+      setEstadoPush("ERROR");
+    }
+  }
+
+  async function activarNotificacionesPush() {
+    if (!sesion) {
+      return;
+    }
+
+    if (
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !("Notification" in window)
+    ) {
+      alert("Este dispositivo o navegador no soporta notificaciones Web Push.");
+      setEstadoPush("NO_COMPATIBLE");
+      return;
+    }
+
+    if (esIOS() && !esModoInstalado()) {
+      alert(
+        "En iPhone, primero agrega ROAC Operations a la pantalla de inicio y ábrelo desde ese icono. Luego vuelve a activar las notificaciones.",
+      );
+      setEstadoPush("NO_INSTALADA");
+      return;
+    }
+
+    const claveVapid = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined;
+
+    if (!claveVapid) {
+      alert("Falta configurar VITE_VAPID_PUBLIC_KEY en ROAC Operations.");
+      setEstadoPush("ERROR");
+      return;
+    }
+
+    try {
+      setEstadoPush("ACTIVANDO");
+
+      const permiso = await Notification.requestPermission();
+
+      if (permiso !== "granted") {
+        setEstadoPush(permiso === "denied" ? "BLOQUEADA" : "PENDIENTE");
+        return;
+      }
+
+      const registro = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+
+      let suscripcion = await registro.pushManager.getSubscription();
+
+      if (!suscripcion) {
+        suscripcion = await registro.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: convertirClaveVapid(claveVapid),
+        });
+      }
+
+      const datos = suscripcion.toJSON();
+
+      const { error } = await supabase
+        .from("push_subscriptions")
+        .upsert(
+          {
+            user_id: sesion.user.id,
+            endpoint: datos.endpoint,
+            p256dh: datos.keys?.p256dh,
+            auth: datos.keys?.auth,
+            user_agent: navigator.userAgent,
+            activo: true,
+            updated_at: new Date().toISOString(),
+          },
+          {
+            onConflict: "endpoint",
+          },
+        );
+
+      if (error) {
+        console.error("Error guardando suscripción push:", error);
+        alert("No se pudo registrar este dispositivo para notificaciones.");
+        setEstadoPush("ERROR");
+        return;
+      }
+
+      setEstadoPush("ACTIVA");
+      alert("Notificaciones de ROAC Operations activadas en este dispositivo.");
+    } catch (error) {
+      console.error("Error activando Web Push:", error);
+      setEstadoPush("ERROR");
+      alert("No se pudieron activar las notificaciones en este dispositivo.");
+    }
+  }
+
+  async function obtenerEndpointPushActual() {
+    try {
+      if (!("serviceWorker" in navigator)) {
+        return null;
+      }
+
+      const registro = await navigator.serviceWorker.getRegistration();
+      const suscripcion = await registro?.pushManager.getSubscription();
+
+      return suscripcion?.endpoint ?? null;
+    } catch (error) {
+      console.error("No se pudo leer la suscripción Push actual:", error);
+      return null;
+    }
+  }
+
+  async function enviarPushOperacional(
+    accion: "NUEVA_AVERIA" | "EQUIPO_OPERATIVO",
+    averiaId: number,
+  ) {
+    try {
+      const excludeEndpoint = await obtenerEndpointPushActual();
+
+      const { error } = await supabase.functions.invoke(
+        "roac-web-push",
+        {
+          body: {
+            accion,
+            averiaId,
+            excludeEndpoint,
+          },
+        },
+      );
+
+      if (error) {
+        console.error(
+          "La operación se guardó correctamente, pero falló la notificación Push:",
+          error,
+        );
+      }
+    } catch (error) {
+      // Muy importante: el Push nunca debe bloquear ni revertir
+      // una operación ya guardada en ROAC.
+      console.error(
+        "Error no crítico al enviar notificación Push:",
+        error,
+      );
+    }
   }
 
   function obtenerAudioContexto() {
@@ -890,6 +1092,14 @@ function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!sesion || !rol) {
+      return;
+    }
+
+    void comprobarEstadoPush();
+  }, [sesion?.user.id, rol]);
 
   useEffect(() => {
     function actualizarTurno() {
@@ -1550,6 +1760,10 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
+    // El registro de la avería YA terminó correctamente.
+    // Desde aquí el Push se ejecuta en segundo plano y nunca bloquea ROAC.
+    void enviarPushOperacional("NUEVA_AVERIA", averiaDb.id);
+
     // 3. Cambiar el estado del equipo en Supabase
     const { error: errorActualizarEquipo } = await supabase
       .from("equipos")
@@ -1751,6 +1965,13 @@ const averiasCerradasEnTurno = averias.filter(
       );
       return;
     }
+
+    // La reparación y el cambio a Operativo ya quedaron guardados.
+    // La alerta Push se envía aparte y no puede bloquear el cierre.
+    void enviarPushOperacional(
+      "EQUIPO_OPERATIVO",
+      averiaSeleccionadaId,
+    );
 
     const horaCierre = obtenerHoraActual();
 
@@ -3553,6 +3774,67 @@ const averiasCerradasEnTurno = averias.filter(
           Modo solo lectura · Puedes consultar el estado de la flota
           y las averías, sin modificar datos.
         </div>
+      )}
+
+      {sesion && estadoPush !== "ACTIVA" && (
+        <section
+          style={{
+            margin: "10px 14px 4px",
+            padding: "12px 14px",
+            borderRadius: "14px",
+            border: "1px solid rgba(74, 72, 225, 0.25)",
+            background: "rgba(245, 246, 255, 0.98)",
+            boxShadow: "0 6px 18px rgba(30, 45, 80, 0.06)",
+          }}
+        >
+          <strong
+            style={{
+              display: "block",
+              marginBottom: "5px",
+              color: "#1d2b4f",
+            }}
+          >
+            🔔 Notificaciones de ROAC
+          </strong>
+
+          <p
+            style={{
+              margin: "0 0 10px",
+              color: "#526079",
+              fontSize: "13px",
+              lineHeight: 1.4,
+            }}
+          >
+            {estadoPush === "NO_INSTALADA"
+              ? "En iPhone, agrega ROAC Operations a la pantalla de inicio para recibir alertas aunque Safari esté cerrado."
+              : estadoPush === "BLOQUEADA"
+                ? "Las notificaciones están bloqueadas en este dispositivo."
+                : estadoPush === "NO_COMPATIBLE"
+                  ? "Este navegador no permite notificaciones Web Push."
+                  : estadoPush === "ERROR"
+                    ? "No se pudo configurar Web Push. Revisa la configuración."
+                    : "Activa las alertas del sistema para recibir nuevas averías y avisos de equipo operativo incluso con ROAC cerrado."}
+          </p>
+
+          {(estadoPush === "PENDIENTE" ||
+            estadoPush === "ACTIVANDO" ||
+            estadoPush === "NO_INSTALADA" ||
+            estadoPush === "ERROR") && (
+            <button
+              type="button"
+              className="primary-button"
+              disabled={estadoPush === "ACTIVANDO"}
+              onClick={() => void activarNotificacionesPush()}
+              style={{ width: "100%" }}
+            >
+              {estadoPush === "ACTIVANDO"
+                ? "Activando..."
+                : estadoPush === "NO_INSTALADA"
+                  ? "Verificar instalación"
+                  : "Activar notificaciones"}
+            </button>
+          )}
+        </section>
       )}
 
       {vista === "inicio" && (
