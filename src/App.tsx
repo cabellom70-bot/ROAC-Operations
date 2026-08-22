@@ -1,4 +1,4 @@
-import { supabase } from "./lib/supabase";
+﻿import { supabase } from "./lib/supabase";
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 
@@ -397,6 +397,12 @@ function App() {
     informadoPor: string;
   } | null>(null);
 
+  const [alertaEquipoOperativo, setAlertaEquipoOperativo] = useState<{
+    id: number;
+    numeroMina: string;
+    trabajoRealizado: string;
+  } | null>(null);
+
   // Diagnóstico temporal de Supabase Realtime.
   // Nos permitirá comprobar desde PC y celular si el canal realmente queda conectado.
   const [estadoRealtime, setEstadoRealtime] = useState("CONECTANDO");
@@ -407,6 +413,8 @@ function App() {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const alertaTimeoutRef = useRef<number | null>(null);
+  const alertaOperativaTimeoutRef = useRef<number | null>(null);
+  const operativosAlertadosRef = useRef<Set<number>>(new Set());
   const averiaLocalPendienteRef = useRef<{
     equipoId: number;
     sistema: string;
@@ -770,6 +778,98 @@ function App() {
     }
   }
 
+  function reproducirAlertaEquipoOperativo() {
+    try {
+      const contexto = obtenerAudioContexto();
+
+      if (contexto.state === "suspended") {
+        void contexto.resume();
+      }
+
+      const inicio = contexto.currentTime + 0.03;
+      const tonos = [
+        { desfase: 0, frecuencia: 720 },
+        { desfase: 0.22, frecuencia: 1040 },
+      ];
+
+      tonos.forEach(({ desfase, frecuencia }) => {
+        const oscilador = contexto.createOscillator();
+        const ganancia = contexto.createGain();
+        const comienzo = inicio + desfase;
+        const termino = comienzo + 0.18;
+
+        oscilador.type = "sine";
+        oscilador.frequency.setValueAtTime(frecuencia, comienzo);
+
+        ganancia.gain.setValueAtTime(0.0001, comienzo);
+        ganancia.gain.exponentialRampToValueAtTime(0.16, comienzo + 0.025);
+        ganancia.gain.exponentialRampToValueAtTime(0.0001, termino);
+
+        oscilador.connect(ganancia);
+        ganancia.connect(contexto.destination);
+        oscilador.start(comienzo);
+        oscilador.stop(termino + 0.02);
+      });
+    } catch (error) {
+      console.warn("No se pudo reproducir alerta de equipo operativo:", error);
+    }
+  }
+
+  function cerrarAlertaEquipoOperativo() {
+    setAlertaEquipoOperativo(null);
+
+    if (alertaOperativaTimeoutRef.current !== null) {
+      window.clearTimeout(alertaOperativaTimeoutRef.current);
+      alertaOperativaTimeoutRef.current = null;
+    }
+  }
+
+  async function manejarEquipoOperativoRealtime(registro: {
+    id?: number;
+    equipo_id?: number;
+    trabajo_realizado?: string;
+  }) {
+    if (!registro.id || !registro.equipo_id) {
+      return;
+    }
+
+    if (operativosAlertadosRef.current.has(registro.id)) {
+      return;
+    }
+
+    operativosAlertadosRef.current.add(registro.id);
+
+    const { data: equipoDb, error } = await supabase
+      .from("equipos")
+      .select("numero_mina")
+      .eq("id", registro.equipo_id)
+      .single();
+
+    if (error || !equipoDb) {
+      console.error("No se pudo identificar el equipo operativo:", error);
+      return;
+    }
+
+    if (alertaOperativaTimeoutRef.current !== null) {
+      window.clearTimeout(alertaOperativaTimeoutRef.current);
+    }
+
+    setAlertaEquipoOperativo({
+      id: registro.id,
+      numeroMina: equipoDb.numero_mina,
+      trabajoRealizado:
+        registro.trabajo_realizado?.trim() ||
+        "Avería finalizada. Equipo disponible para operación.",
+    });
+
+    reproducirAlertaEquipoOperativo();
+
+    alertaOperativaTimeoutRef.current = window.setTimeout(() => {
+      setAlertaEquipoOperativo(null);
+      alertaOperativaTimeoutRef.current = null;
+    }, 12_000);
+  }
+
   async function manejarNuevaAveriaRealtime(registro: {
     id?: number;
     equipo_id?: number;
@@ -1090,6 +1190,10 @@ function App() {
       if (alertaTimeoutRef.current !== null) {
         window.clearTimeout(alertaTimeoutRef.current);
       }
+
+      if (alertaOperativaTimeoutRef.current !== null) {
+        window.clearTimeout(alertaOperativaTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -1206,6 +1310,19 @@ function App() {
                 equipo_id?: number;
                 sistema?: string;
                 informado_por?: string;
+              },
+            );
+          }
+
+          if (
+            payload.eventType === "UPDATE" &&
+            (payload.new as { estado_averia?: string }).estado_averia === "Cerrada"
+          ) {
+            void manejarEquipoOperativoRealtime(
+              payload.new as {
+                id?: number;
+                equipo_id?: number;
+                trabajo_realizado?: string;
               },
             );
           }
@@ -3646,6 +3763,19 @@ const averiasCerradasEnTurno = averias.filter(
           cursor: pointer;
         }
 
+        .new-fault-alert.operational-alert {
+          border-color: rgba(22, 163, 74, 0.38);
+          border-left-color: #16a34a;
+        }
+
+        .operational-alert .new-fault-alert-kicker {
+          color: #138a3d;
+        }
+
+        .operational-alert .new-fault-alert-action {
+          background: #148a43;
+        }
+
         @keyframes newFaultAlertIn {
           from {
             opacity: 0;
@@ -3696,6 +3826,48 @@ const averiasCerradasEnTurno = averias.filter(
             }}
           >
             Ver avería
+          </button>
+        </aside>
+      )}
+      {alertaEquipoOperativo && (
+        <aside
+          className="new-fault-alert operational-alert"
+          role="status"
+          aria-live="assertive"
+        >
+          <div className="new-fault-alert-top">
+            <div>
+              <p className="new-fault-alert-kicker">Equipo operativo</p>
+              <h3>Equipo {alertaEquipoOperativo.numeroMina}</h3>
+              <p>
+                Reparación finalizada.
+                <br />
+                <strong>Trabajo realizado:</strong>{" "}
+                {alertaEquipoOperativo.trabajoRealizado}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="new-fault-alert-close"
+              onClick={cerrarAlertaEquipoOperativo}
+              aria-label="Cerrar alerta de equipo operativo"
+            >
+              ×
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="new-fault-alert-action"
+            onClick={() => {
+              const id = alertaEquipoOperativo.id;
+              cerrarAlertaEquipoOperativo();
+              setAveriaSeleccionadaId(id);
+              setVista("detalle-averia");
+            }}
+          >
+            Ver reparación
           </button>
         </aside>
       )}
