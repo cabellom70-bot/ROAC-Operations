@@ -1,6 +1,7 @@
 ﻿import { supabase } from "./lib/supabase";
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
+import { jsPDF } from "jspdf";
 
 import "./App.css";
 
@@ -20,6 +21,7 @@ type Vista =
   | "inicio"
   | "averias"
   | "status"
+  | "informe-turno"
   | "seleccionar-equipo"
   | "registrar-averia"
   | "detalle-averia"
@@ -71,6 +73,15 @@ type StatusTurnoGuardado = {
   averias: Averia[];
   mantenimientos: Mantenimiento[];
   creadoEn: string;
+};
+
+type InformeTurnoSnapshot = {
+  generadoEn: string;
+  turno: TurnoActual;
+  resumen: ResumenStatusTurno;
+  averias: Averia[];
+  mantenimientos: Mantenimiento[];
+  intervenciones: IntervencionAveria[];
 };
 
 const ZONA_HORARIA_OPERACIONAL = "America/Santiago";
@@ -482,6 +493,7 @@ function App() {
   );
   const turnoAnteriorRef = useRef<TurnoActual>(turnoActual);
   const [historialTurnos, setHistorialTurnos] = useState<StatusTurnoGuardado[]>([]);
+  const [informeTurno, setInformeTurno] = useState<InformeTurnoSnapshot | null>(null);
   const [claveHistorialAbierto, setClaveHistorialAbierto] = useState<string | null>(null);
   const [mostrarHistorialCompleto, setMostrarHistorialCompleto] = useState(false);
   const [datosOperacionalesListos, setDatosOperacionalesListos] = useState(false);
@@ -1821,6 +1833,211 @@ const averiasCerradasEnTurno = averias.filter(
   const historialTurnosVisibles = mostrarHistorialCompleto
     ? historialTurnosCerrados
     : historialTurnosCerrados.slice(0, 10);
+
+
+  function generarInformeTurnoActual() {
+    const averiasUnicas = Array.from(
+      new Map(
+        [...averiasHeredadas, ...averiasDelTurno].map((averia) => [
+          averia.id,
+          averia,
+        ]),
+      ).values(),
+    );
+
+    const mantenimientosUnicos = Array.from(
+      new Map(
+        [...mantenimientosHeredados, ...mantenimientosDelTurno].map(
+          (mantenimiento) => [mantenimiento.id, mantenimiento],
+        ),
+      ).values(),
+    );
+
+    const idsAverias = new Set(averiasUnicas.map((averia) => averia.id));
+
+    setInformeTurno({
+      generadoEn: new Date().toISOString(),
+      turno: { ...turnoActual },
+      resumen: {
+        caexOperativosEnMina,
+        numeroBackup,
+        equiposOperativos,
+        equiposEnAtencion,
+        equiposFueraServicio,
+        mantenimientosEnCurso: mantenimientosEnCurso.length,
+        averiasIniciadas: averiasDelTurno.length,
+        averiasHeredadas: averiasHeredadas.length,
+        averiasCerradas: averiasCerradasEnTurno.length,
+        mantenimientosIniciados: mantenimientosDelTurno.length,
+        mantenimientosHeredados: mantenimientosHeredados.length,
+        mantenimientosFinalizados: mantenimientosFinalizadosEnTurno.length,
+      },
+      averias: averiasUnicas.map((averia) => ({
+        ...averia,
+        equipo: { ...averia.equipo },
+      })),
+      mantenimientos: mantenimientosUnicos.map((mantenimiento) => ({
+        ...mantenimiento,
+        equipo: { ...mantenimiento.equipo },
+      })),
+      intervenciones: intervenciones
+        .filter((intervencion) => idsAverias.has(intervencion.averiaId))
+        .map((intervencion) => ({ ...intervencion })),
+    });
+
+    setVista("informe-turno");
+  }
+
+  function descargarInformePdf() {
+    if (!informeTurno) return;
+
+    const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const x = 15;
+    const ancho = 180;
+    const limite = 282;
+    let y = 16;
+
+    const asegurarEspacio = (alto = 12) => {
+      if (y + alto > limite) {
+        pdf.addPage();
+        y = 16;
+      }
+    };
+
+    const escribir = (texto: string, negrita = false, tamano = 9) => {
+      pdf.setFont("helvetica", negrita ? "bold" : "normal");
+      pdf.setFontSize(tamano);
+      const lineas = pdf.splitTextToSize(texto, ancho);
+      asegurarEspacio(lineas.length * 4.5 + 3);
+      pdf.text(lineas, x, y);
+      y += lineas.length * 4.5 + 1.5;
+    };
+
+    const seccion = (texto: string) => {
+      asegurarEspacio(14);
+      y += 3;
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text(texto.toUpperCase(), x, y);
+      y += 3;
+      pdf.setDrawColor(40, 76, 120);
+      pdf.line(x, y, x + ancho, y);
+      y += 6;
+    };
+
+    pdf.setFont("helvetica", "bold");
+    pdf.setFontSize(8);
+    pdf.text("ROAC OPERATIONS · EPSA", x, y);
+    y += 6;
+    pdf.setFontSize(16);
+    pdf.text(`Informe de turno ${informeTurno.turno.tipo}`, x, y);
+    y += 6;
+    pdf.setFont("helvetica", "normal");
+    pdf.setFontSize(9);
+    pdf.text(informeTurno.turno.rangoTurno, x, y);
+    y += 5;
+    pdf.text(`Generado: ${formatearFechaHoraChile(informeTurno.generadoEn)}`, x, y);
+    y += 7;
+    pdf.setDrawColor(25, 63, 105);
+    pdf.line(x, y, x + ancho, y);
+    y += 6;
+
+    seccion("Resumen operacional");
+    escribir(`CAEX operativos en mina: ${informeTurno.resumen.caexOperativosEnMina}`);
+    escribir(`CAEX backup: ${informeTurno.resumen.numeroBackup ?? "Sin backup"}`);
+    escribir(`Equipos operativos: ${informeTurno.resumen.equiposOperativos}`);
+    escribir(`Equipos en atención: ${informeTurno.resumen.equiposEnAtencion}`);
+    escribir(`Fuera de servicio: ${informeTurno.resumen.equiposFueraServicio}`);
+    escribir(`Mantenimiento programado: ${informeTurno.resumen.mantenimientosEnCurso}`);
+    escribir(`Averías iniciadas: ${informeTurno.resumen.averiasIniciadas}`);
+    escribir(`Recibidas del turno anterior: ${informeTurno.resumen.averiasHeredadas}`);
+    escribir(`Cerradas durante el turno: ${informeTurno.resumen.averiasCerradas}`);
+
+    seccion("Averías del turno");
+    if (informeTurno.averias.length === 0) {
+      escribir("Sin averías registradas o heredadas al momento de generar el informe.");
+    } else {
+      informeTurno.averias.forEach((averia, indice) => {
+        asegurarEspacio(40);
+        escribir(
+          `${indice + 1}. ${averia.equipo.numeroMina} (${averia.equipo.numeroInterno}) · ${averia.equipo.modelo} · ${averia.sistema}`,
+          true,
+          10,
+        );
+        escribir(`Estado: ${averia.estadoAveria === "Cerrada" ? "Operativo" : averia.estadoAveria}`, true);
+        escribir(`Ubicación: ${averia.ubicacion}`);
+        escribir(`Detalle inicial: ${averia.detalleInicial}`);
+        escribir(`Detención: ${formatearFechaHoraChile(averia.fechaAviso)}`);
+
+        if (averia.fechaAtencion) escribir(`Atención: ${formatearFechaHoraChile(averia.fechaAtencion)}`);
+        if (averia.tomadaPor) escribir(`${averia.estadoAveria === "Cerrada" ? "Técnico final" : "Técnico actual"}: ${averia.tomadaPor}`);
+
+        if (averia.estadoAveria === "Cerrada" && averia.fechaCierre) {
+          escribir(`Operativo: ${formatearFechaHoraChile(averia.fechaCierre)}`);
+          escribir(`Tiempo fuera de servicio: ${formatearTiempoFueraServicio(averia.fechaAviso, averia.fechaCierre)}`, true);
+        }
+
+        if (averia.trabajoRealizado) escribir(`Trabajo realizado: ${averia.trabajoRealizado}`);
+
+        if (averia.estadoAveria !== "Cerrada") {
+          const ultimoAvance = informeTurno.intervenciones
+            .filter((i) => i.averiaId === averia.id && i.tipo === "AVANCE" && i.detalle.trim() !== "")
+            .sort((a, b) => new Date(b.fecha).getTime() - new Date(a.fecha).getTime())[0];
+
+          if (ultimoAvance) escribir(`Último avance: ${ultimoAvance.detalle}`, true);
+          if (averia.estadoAveria === "Publicada") escribir("Equipo fuera de servicio, pendiente de atención.", true);
+          if (averia.estadoAveria === "En atención") escribir("Equipo en atención; pendiente de continuidad o cierre.", true);
+        }
+
+        y += 3;
+        pdf.setDrawColor(220, 227, 235);
+        pdf.line(x, y, x + ancho, y);
+        y += 5;
+      });
+    }
+
+    seccion("Mantenimientos programados");
+    if (informeTurno.mantenimientos.length === 0) {
+      escribir("Sin mantenimientos programados asociados al turno al momento de generar el informe.");
+    } else {
+      informeTurno.mantenimientos.forEach((m, indice) => {
+        asegurarEspacio(32);
+        escribir(`${indice + 1}. ${m.equipo.numeroMina} (${m.equipo.numeroInterno}) · ${m.equipo.modelo}`, true, 10);
+        escribir(`Estado: ${m.estado}`);
+        escribir(`Inicio: ${formatearFechaHoraChile(m.fechaInicio)}`);
+        escribir(`Responsable: ${m.responsable}`);
+        escribir(`Motivo: ${m.motivo}`);
+        if (m.fechaFin) escribir(`Fin: ${formatearFechaHoraChile(m.fechaFin)}`);
+        if (m.trabajoRealizado) escribir(`Trabajo realizado: ${m.trabajoRealizado}`);
+        y += 4;
+      });
+    }
+
+    const fecha = new Date(informeTurno.generadoEn)
+      .toLocaleDateString("en-CA", { timeZone: "America/Santiago" })
+      .replaceAll("-", "");
+    pdf.save(`ROAC-Informe-${informeTurno.turno.tipo.toLowerCase()}-${fecha}.pdf`);
+  }
+
+  function obtenerUltimoAvanceInforme(averiaId: number) {
+    if (!informeTurno) {
+      return null;
+    }
+
+    const avances = informeTurno.intervenciones
+      .filter(
+        (intervencion) =>
+          intervencion.averiaId === averiaId &&
+          intervencion.tipo === "AVANCE" &&
+          intervencion.detalle.trim() !== "",
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.fecha).getTime() - new Date(a.fecha).getTime(),
+      );
+
+    return avances[0] ?? null;
+  }
 
   function irAInicio() {
     setEquipoSeleccionado(null);
@@ -3677,6 +3894,187 @@ const averiasCerradasEnTurno = averias.filter(
           border-color: rgba(45, 177, 255, 0.85);
         }
 
+        .report-screen {
+          width: min(980px, 100%);
+          margin: 0 auto;
+          padding: 4px 0 28px;
+        }
+
+        .report-actions {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 18px;
+        }
+
+        .report-action-button {
+          border: 0;
+          border-radius: 12px;
+          padding: 11px 16px;
+          font: inherit;
+          font-weight: 850;
+          cursor: pointer;
+        }
+
+        .report-back-button {
+          background: #edf2f7;
+          color: #20344d;
+        }
+
+        .report-print-button {
+          background: #0d6efd;
+          color: #ffffff;
+        }
+
+        .report-document {
+          background: #ffffff;
+          border: 1px solid #d8e2ee;
+          border-radius: 18px;
+          padding: 24px;
+          box-shadow: 0 14px 36px rgba(25, 49, 80, 0.08);
+        }
+
+        .report-title-row {
+          display: flex;
+          justify-content: space-between;
+          gap: 20px;
+          align-items: flex-start;
+          padding-bottom: 16px;
+          border-bottom: 2px solid #163d69;
+        }
+
+        .report-title-row h2 {
+          margin: 3px 0 4px;
+          color: #102f53;
+        }
+
+        .report-title-row p {
+          margin: 3px 0;
+          color: #52657b;
+        }
+
+        .report-generated {
+          text-align: right;
+          font-size: 12px;
+          color: #617389;
+        }
+
+        .report-summary-grid {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin: 18px 0 22px;
+        }
+
+        .report-summary-item {
+          padding: 12px;
+          border: 1px solid #dde6f0;
+          border-radius: 12px;
+          background: #f8fafc;
+        }
+
+        .report-summary-item span {
+          display: block;
+          color: #66778b;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: .45px;
+        }
+
+        .report-summary-item strong {
+          display: block;
+          margin-top: 5px;
+          color: #173b65;
+          font-size: 18px;
+        }
+
+        .report-section-title {
+          margin: 22px 0 10px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid #d9e3ee;
+          color: #163d69;
+          font-size: 15px;
+          text-transform: uppercase;
+          letter-spacing: .7px;
+        }
+
+        .report-record {
+          padding: 12px 0;
+          border-bottom: 1px solid #e5ebf2;
+          break-inside: avoid;
+        }
+
+        .report-record:last-child {
+          border-bottom: 0;
+        }
+
+        .report-record h4 {
+          margin: 0 0 6px;
+          color: #172f4d;
+        }
+
+        .report-record p {
+          margin: 4px 0;
+          color: #354a63;
+          line-height: 1.4;
+          font-size: 13px;
+        }
+
+        .report-record .report-emphasis {
+          font-weight: 850;
+          color: #0d477d;
+        }
+
+        .report-empty {
+          color: #748397;
+          font-style: italic;
+        }
+
+        @media print {
+          body {
+            background: #ffffff !important;
+          }
+
+          .app-header,
+          .bottom-navigation,
+          .report-actions,
+          .new-fault-alert {
+            display: none !important;
+          }
+
+          .app {
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+
+          .report-screen {
+            width: 100% !important;
+            max-width: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
+
+          .report-document {
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+          }
+
+          .report-summary-grid {
+            grid-template-columns: repeat(4, 1fr);
+          }
+
+          @page {
+            size: A4;
+            margin: 14mm;
+          }
+        }
+
         /* ───── RESPONSIVE PARA TELÉFONO ───── */
         @media (max-width: 900px) {
           .app-header {
@@ -4322,6 +4720,7 @@ const averiasCerradasEnTurno = averias.filter(
         Realtime: {estadoRealtime}
       </div>
 
+      {vista !== "informe-turno" && (
       <header className="app-header roac-header-background">
         {/* TURNO: DÍA / NOCHE */}
         <div className="header-overlay-shift">
@@ -4363,6 +4762,7 @@ const averiasCerradasEnTurno = averias.filter(
           Cerrar sesión
         </button>
       </header>
+      )}
 
       {!puedeModificar && (
         <div className="read-only-notice">
@@ -5434,6 +5834,22 @@ const averiasCerradasEnTurno = averias.filter(
 
           <div
             style={{
+              marginTop: "26px",
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            <button
+              type="button"
+              className="reset-data-button"
+              onClick={generarInformeTurnoActual}
+            >
+              Generar informe de turno
+            </button>
+          </div>
+
+          <div
+            style={{
               marginTop: "30px",
               paddingTop: "22px",
               borderTop: "1px solid #dbe4ef",
@@ -5674,6 +6090,254 @@ const averiasCerradasEnTurno = averias.filter(
             )}
           </div>
 
+        </section>
+      )}
+
+      {vista === "informe-turno" && informeTurno && (
+        <section className="report-screen">
+          <div className="report-actions">
+            <button
+              type="button"
+              className="report-action-button report-back-button"
+              onClick={() => setVista("status")}
+            >
+              ← Volver al Status
+            </button>
+
+            <button
+              type="button"
+              className="report-action-button report-print-button"
+              onClick={descargarInformePdf}
+            >
+              Descargar PDF
+            </button>
+          </div>
+
+          <article className="report-document">
+            <div className="report-title-row">
+              <div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "11px",
+                    fontWeight: 900,
+                    letterSpacing: "1.1px",
+                    color: "#315a87",
+                  }}
+                >
+                  ROAC OPERATIONS · EPSA
+                </p>
+                <h2>Informe de turno {informeTurno.turno.tipo}</h2>
+                <p>{informeTurno.turno.rangoTurno}</p>
+              </div>
+
+              <div className="report-generated">
+                <strong>Generado</strong>
+                <br />
+                {formatearFechaHoraChile(informeTurno.generadoEn)}
+              </div>
+            </div>
+
+            <div className="report-summary-grid">
+              <div className="report-summary-item">
+                <span>CAEX operativos en mina</span>
+                <strong>{informeTurno.resumen.caexOperativosEnMina}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Backup</span>
+                <strong>{informeTurno.resumen.numeroBackup ?? "Sin backup"}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Fuera de servicio</span>
+                <strong>{informeTurno.resumen.equiposFueraServicio}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>En atención</span>
+                <strong>{informeTurno.resumen.equiposEnAtencion}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Equipos operativos</span>
+                <strong>{informeTurno.resumen.equiposOperativos}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Mant. programado</span>
+                <strong>{informeTurno.resumen.mantenimientosEnCurso}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Averías iniciadas</span>
+                <strong>{informeTurno.resumen.averiasIniciadas}</strong>
+              </div>
+              <div className="report-summary-item">
+                <span>Averías cerradas</span>
+                <strong>{informeTurno.resumen.averiasCerradas}</strong>
+              </div>
+            </div>
+
+            <h3 className="report-section-title">Averías del turno</h3>
+
+            {informeTurno.averias.length === 0 ? (
+              <p className="report-empty">
+                Sin averías registradas o heredadas al momento de generar el informe.
+              </p>
+            ) : (
+              informeTurno.averias.map((averia) => {
+                const ultimoAvance = obtenerUltimoAvanceInforme(averia.id);
+                const tiempoFueraServicio =
+                  averia.estadoAveria === "Cerrada" && averia.fechaCierre
+                    ? formatearTiempoFueraServicio(
+                        averia.fechaAviso,
+                        averia.fechaCierre,
+                      )
+                    : "";
+
+                return (
+                  <div className="report-record" key={`informe-${averia.id}`}>
+                    <h4>
+                      {averia.equipo.numeroMina} ({averia.equipo.numeroInterno}) ·{" "}
+                      {averia.sistema}
+                    </h4>
+
+                    <p>
+                      <strong>Estado:</strong>{" "}
+                      {averia.estadoAveria === "Cerrada"
+                        ? "Operativo"
+                        : averia.estadoAveria}
+                    </p>
+
+                    <p>
+                      <strong>Detención:</strong>{" "}
+                      {formatearFechaHoraChile(averia.fechaAviso)}
+                    </p>
+
+                    {averia.fechaAtencion && (
+                      <p>
+                        <strong>Atención:</strong>{" "}
+                        {formatearFechaHoraChile(averia.fechaAtencion)}
+                      </p>
+                    )}
+
+                    {averia.tomadaPor && (
+                      <p>
+                        <strong>
+                          {averia.estadoAveria === "Cerrada"
+                            ? "Técnico final:"
+                            : "Técnico actual:"}
+                        </strong>{" "}
+                        {averia.tomadaPor}
+                      </p>
+                    )}
+
+                    {averia.estadoAveria === "Cerrada" && averia.fechaCierre && (
+                      <>
+                        <p>
+                          <strong>Operativo:</strong>{" "}
+                          {formatearFechaHoraChile(averia.fechaCierre)}
+                        </p>
+                        <p className="report-emphasis">
+                          Tiempo fuera de servicio: {tiempoFueraServicio}
+                        </p>
+                      </>
+                    )}
+
+                    {averia.trabajoRealizado && (
+                      <p>
+                        <strong>Trabajo realizado:</strong>{" "}
+                        {averia.trabajoRealizado}
+                      </p>
+                    )}
+
+                    {averia.estadoAveria !== "Cerrada" && ultimoAvance && (
+                      <p>
+                        <strong>Último avance:</strong>{" "}
+                        {ultimoAvance.detalle}
+                      </p>
+                    )}
+
+                    {averia.estadoAveria === "Publicada" && (
+                      <p className="report-emphasis">
+                        Equipo fuera de servicio, pendiente de atención.
+                      </p>
+                    )}
+
+                    {averia.estadoAveria === "En atención" && (
+                      <p className="report-emphasis">
+                        Equipo en atención. Intervención pendiente de continuidad/cierre.
+                      </p>
+                    )}
+                  </div>
+                );
+              })
+            )}
+
+            <h3 className="report-section-title">Mantenimientos programados</h3>
+
+            {informeTurno.mantenimientos.length === 0 ? (
+              <p className="report-empty">
+                Sin mantenimientos programados asociados al turno al momento de generar el informe.
+              </p>
+            ) : (
+              informeTurno.mantenimientos.map((mantenimiento) => {
+                const duracion =
+                  mantenimiento.estado === "Finalizado" &&
+                  mantenimiento.fechaFin
+                    ? formatearTiempoFueraServicio(
+                        mantenimiento.fechaInicio,
+                        mantenimiento.fechaFin,
+                      )
+                    : "";
+
+                return (
+                  <div
+                    className="report-record"
+                    key={`informe-mant-${mantenimiento.id}`}
+                  >
+                    <h4>
+                      {mantenimiento.equipo.numeroMina} (
+                      {mantenimiento.equipo.numeroInterno}) · Mantenimiento programado
+                    </h4>
+                    <p>
+                      <strong>Estado:</strong>{" "}
+                      {mantenimiento.estado === "Finalizado"
+                        ? "Finalizado"
+                        : "En curso"}
+                    </p>
+                    <p>
+                      <strong>Inicio:</strong>{" "}
+                      {formatearFechaHoraChile(mantenimiento.fechaInicio)}
+                    </p>
+                    <p>
+                      <strong>Responsable:</strong>{" "}
+                      {mantenimiento.responsable}
+                    </p>
+                    <p>
+                      <strong>Motivo:</strong>{" "}
+                      {mantenimiento.motivo}
+                    </p>
+
+                    {mantenimiento.fechaFin && (
+                      <p>
+                        <strong>Fin:</strong>{" "}
+                        {formatearFechaHoraChile(mantenimiento.fechaFin)}
+                      </p>
+                    )}
+
+                    {duracion && (
+                      <p className="report-emphasis">
+                        Tiempo en mantenimiento: {duracion}
+                      </p>
+                    )}
+
+                    {mantenimiento.trabajoRealizado && (
+                      <p>
+                        <strong>Trabajo realizado:</strong>{" "}
+                        {mantenimiento.trabajoRealizado}
+                      </p>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </article>
         </section>
       )}
 
@@ -5985,6 +6649,7 @@ const averiasCerradasEnTurno = averias.filter(
       {vista !== "seleccionar-equipo" &&
         vista !== "registrar-averia" &&
         vista !== "detalle-averia" &&
+        vista !== "informe-turno" &&
         vista !== "seleccionar-backup" &&
         vista !== "seleccionar-equipo-mantenimiento" &&
         vista !== "registrar-mantenimiento" &&
