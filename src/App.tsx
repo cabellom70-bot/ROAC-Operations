@@ -13,6 +13,7 @@ import RegistrarAveria, {
 import type { Averia } from "./types/Averia";
 import type { Equipo } from "./types/Equipo";
 import type { Mantenimiento } from "./types/Mantenimiento";
+import type { IntervencionAveria } from "./types/IntervencionAveria";
 
 
 type Vista =
@@ -421,6 +422,7 @@ function App() {
   const [equipos, setEquipos] = useState<Equipo[]>([]);
   const [averias, setAverias] = useState<Averia[]>([]);
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
+  const [intervenciones, setIntervenciones] = useState<IntervencionAveria[]>([]);
   const [equipoSeleccionado, setEquipoSeleccionado] =
     useState<Equipo | null>(null);
   const [averiaSeleccionadaId, setAveriaSeleccionadaId] =
@@ -565,6 +567,7 @@ function App() {
     setEquipos([]);
     setAverias([]);
     setMantenimientos([]);
+    setIntervenciones([]);
     setNumeroBackup(null);
     setEquipoSeleccionado(null);
     setAveriaSeleccionadaId(null);
@@ -1133,6 +1136,39 @@ function App() {
   }
 
 
+  async function cargarIntervenciones() {
+    const { data, error } = await supabase
+      .from("intervenciones_averia")
+      .select(`
+        id,
+        averia_id,
+        tecnico,
+        tipo,
+        detalle,
+        fecha,
+        clave_turno
+      `)
+      .order("fecha", { ascending: true });
+
+    if (error) {
+      console.error("Error al cargar intervenciones de avería:", error);
+      return;
+    }
+
+    const convertidas: IntervencionAveria[] = (data ?? []).map((registro) => ({
+      id: registro.id,
+      averiaId: registro.averia_id,
+      tecnico: registro.tecnico,
+      tipo: registro.tipo,
+      detalle: registro.detalle ?? "",
+      fecha: registro.fecha,
+      claveTurno: registro.clave_turno ?? "",
+    }));
+
+    setIntervenciones(convertidas);
+  }
+
+
   async function cargarMantenimientos() {
     const { data, error } = await supabase
       .from("mantenimientos")
@@ -1509,6 +1545,7 @@ function App() {
         cargarEquipos(),
         cargarAverias(),
         cargarMantenimientos(),
+        cargarIntervenciones(),
         cargarBackup(),
         cargarHistorialTurnos(),
       ]);
@@ -1609,6 +1646,18 @@ function App() {
         (payload) => {
           console.log("[ROAC Realtime] mantenimientos:", payload);
           void cargarMantenimientos();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "intervenciones_averia",
+        },
+        (payload) => {
+          console.log("[ROAC Realtime] intervenciones_averia:", payload);
+          void cargarIntervenciones();
         },
       )
       .on(
@@ -2244,6 +2293,23 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
+    const { error: errorIntervencion } = await supabase
+      .from("intervenciones_averia")
+      .insert({
+        averia_id: averiaSeleccionadaId,
+        tecnico: responsable,
+        tipo: "TOMA",
+        detalle: "Toma inicial de la avería.",
+        fecha: fechaAtencion,
+        clave_turno: turnoActual.claveTurno,
+      });
+
+    if (errorIntervencion) {
+      console.error("No se pudo registrar la toma en el historial:", errorIntervencion);
+    } else {
+      void cargarIntervenciones();
+    }
+
     const { error: errorEquipo } = await supabase
       .from("equipos")
       .update({
@@ -2294,6 +2360,110 @@ const averiasCerradasEnTurno = averias.filter(
     alert("Ocurrió un error al tomar la avería.");
   }
 }
+  async function registrarAvanceAveria(
+    tecnico: string,
+    detalle: string,
+  ) {
+    if (!exigirPermiso() || averiaSeleccionadaId === null) {
+      return;
+    }
+
+    const texto = detalle.trim();
+    const nombreTecnico = tecnico.trim();
+
+    if (!nombreTecnico) {
+      alert("No hay un técnico activo asignado a esta avería.");
+      return;
+    }
+
+    if (!texto) {
+      alert("Escribe el avance realizado.");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("intervenciones_averia")
+      .insert({
+        averia_id: averiaSeleccionadaId,
+        tecnico: nombreTecnico,
+        tipo: "AVANCE",
+        detalle: texto,
+        fecha: new Date().toISOString(),
+        clave_turno: turnoActual.claveTurno,
+      });
+
+    if (error) {
+      console.error("No se pudo registrar el avance:", error);
+      alert("No se pudo guardar el avance de la avería.");
+      return;
+    }
+
+    await cargarIntervenciones();
+  }
+
+  async function tomarContinuidadAveria(nuevoTecnico: string) {
+    if (!exigirPermiso() || averiaSeleccionadaId === null) {
+      return;
+    }
+
+    const tecnico = nuevoTecnico.trim();
+
+    if (!tecnico) {
+      alert("Indica el técnico que continuará la atención.");
+      return;
+    }
+
+    const averiaActual = averias.find(
+      (averia) => averia.id === averiaSeleccionadaId,
+    );
+
+    if (!averiaActual || averiaActual.estadoAveria !== "En atención") {
+      alert("Esta avería no está disponible para tomar continuidad.");
+      return;
+    }
+
+    const fechaContinuidad = new Date().toISOString();
+
+    const { error: errorAveria } = await supabase
+      .from("averias")
+      .update({
+        tomada_por: tecnico,
+      })
+      .eq("id", averiaSeleccionadaId);
+
+    if (errorAveria) {
+      console.error("No se pudo cambiar el técnico actual:", errorAveria);
+      alert("No se pudo tomar la continuidad de la avería.");
+      return;
+    }
+
+    const { error: errorIntervencion } = await supabase
+      .from("intervenciones_averia")
+      .insert({
+        averia_id: averiaSeleccionadaId,
+        tecnico,
+        tipo: "CONTINUIDAD",
+        detalle: `Continuidad de atención. Recibe de ${averiaActual.tomadaPor || "turno anterior"}.`,
+        fecha: fechaContinuidad,
+        clave_turno: turnoActual.claveTurno,
+      });
+
+    if (errorIntervencion) {
+      console.error("No se pudo registrar la continuidad:", errorIntervencion);
+      alert("El técnico cambió, pero no se pudo registrar la continuidad en el historial.");
+    }
+
+    setAverias((anteriores) =>
+      anteriores.map((averia) =>
+        averia.id === averiaSeleccionadaId
+          ? { ...averia, tomadaPor: tecnico }
+          : averia,
+      ),
+    );
+
+    await cargarIntervenciones();
+  }
+
   async function cerrarAveria(
   trabajoRealizado: string,
 ) {
@@ -2479,21 +2649,6 @@ const averiasCerradasEnTurno = averias.filter(
     }
   }
 
-  async function recargarDatosDesdeSupabase() {
-    try {
-      await Promise.all([
-        cargarEquipos(),
-        cargarAverias(),
-        cargarMantenimientos(),
-        cargarBackup(),
-        cargarHistorialTurnos(),
-      ]);
-      alert("Datos sincronizados con Supabase.");
-    } catch (error) {
-      console.error(error);
-      alert("No se pudieron recargar los datos.");
-    }
-  }
 
   if (cargandoSesion) {
     return (
@@ -5519,13 +5674,6 @@ const averiasCerradasEnTurno = averias.filter(
             )}
           </div>
 
-          <button
-            type="button"
-            className="reset-data-button"
-            onClick={recargarDatosDesdeSupabase}
-          >
-            Recargar desde Supabase
-          </button>
         </section>
       )}
 
@@ -5822,8 +5970,14 @@ const averiasCerradasEnTurno = averias.filter(
         averiaSeleccionada && (
           <DetalleAveria
             averia={averiaSeleccionada}
+            intervenciones={intervenciones.filter(
+              (intervencion) => intervencion.averiaId === averiaSeleccionada.id,
+            )}
+            puedeModificar={puedeModificar}
             onVolver={() => setVista("averias")}
             onTomar={tomarAveria}
+            onRegistrarAvance={registrarAvanceAveria}
+            onTomarContinuidad={tomarContinuidadAveria}
             onCerrar={cerrarAveria}
           />
         )}
