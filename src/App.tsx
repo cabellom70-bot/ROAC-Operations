@@ -1685,7 +1685,7 @@ function App() {
         },
         (mensaje) => {
           const payload = mensaje.payload as {
-            accion?: "NUEVA_AVERIA" | "EQUIPO_OPERATIVO";
+            accion?: "NUEVA_AVERIA" | "TOMAR_AVERIA" | "EQUIPO_OPERATIVO";
             averiaId?: number;
             equipoId?: number;
             sistema?: string;
@@ -1710,6 +1710,13 @@ function App() {
               sistema: payload.sistema,
               informado_por: payload.informadoPor,
             });
+          }
+
+          if (payload.accion === "TOMAR_AVERIA") {
+            // El cambio a "En atención" debe reflejarse al instante
+            // en todos los demás dispositivos.
+            void cargarAverias();
+            void cargarEquipos();
           }
 
           if (
@@ -2894,6 +2901,19 @@ const averiasCerradasEnTurno = averias.filter(
         "La avería fue tomada, pero no se pudo actualizar el equipo.",
       );
       return;
+    }
+
+    // Broadcast dedicado para que "Tomar avería" sea instantáneo
+    // y no dependa de la sincronización de seguridad.
+    if (canalAveriasBroadcastRef.current) {
+      await canalAveriasBroadcastRef.current.send({
+        type: "broadcast",
+        event: "averia_changed",
+        payload: {
+          accion: "TOMAR_AVERIA",
+          averiaId: averiaSeleccionadaId,
+        },
+      });
     }
 
     const horaAtencion = obtenerHoraActual();
