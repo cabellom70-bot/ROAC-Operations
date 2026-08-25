@@ -488,6 +488,7 @@ function App() {
   } | null>(null);
   const sincronizacionEnCursoRef = useRef(false);
   const estadoRealtimeRef = useRef("CONECTANDO");
+  const canalBackupBroadcastRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const puedeModificar = rol === "operaciones";
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
@@ -1621,6 +1622,43 @@ function App() {
 
   useEffect(() => {
     if (!sesion || !rol) {
+      return;
+    }
+
+    const canalBackup = supabase
+      .channel("roac-backup-broadcast")
+      .on(
+        "broadcast",
+        {
+          event: "backup_changed",
+        },
+        (payload) => {
+          console.log("[ROAC Broadcast] backup_changed:", payload);
+
+          const nuevoBackup =
+            typeof payload.payload?.numeroMina === "string"
+              ? payload.payload.numeroMina
+              : null;
+
+          setNumeroBackup(nuevoBackup);
+          void cargarEquipos();
+        },
+      )
+      .subscribe((status) => {
+        console.log("[ROAC Broadcast] estado backup:", status);
+      });
+
+    canalBackupBroadcastRef.current = canalBackup;
+
+    return () => {
+      canalBackupBroadcastRef.current = null;
+      void supabase.removeChannel(canalBackup);
+    };
+  }, [sesion?.user.id, rol]);
+
+
+  useEffect(() => {
+    if (!sesion || !rol) {
       estadoRealtimeRef.current = "CERRADO";
       setEstadoRealtime("CERRADO");
       return;
@@ -2403,6 +2441,17 @@ const averiasCerradasEnTurno = averias.filter(
         }
 
         setNumeroBackup(null);
+
+        if (canalBackupBroadcastRef.current) {
+          await canalBackupBroadcastRef.current.send({
+            type: "broadcast",
+            event: "backup_changed",
+            payload: {
+              numeroMina: null,
+            },
+          });
+        }
+
         alert(`El CAEX ${equipoSeleccionado.numeroMina} era el backup y entró a mantenimiento programado. Actualmente no hay backup asignado.`);
       }
 
@@ -2640,6 +2689,16 @@ const averiasCerradasEnTurno = averias.filter(
       }
 
       setNumeroBackup(null);
+
+      if (canalBackupBroadcastRef.current) {
+        await canalBackupBroadcastRef.current.send({
+          type: "broadcast",
+          event: "backup_changed",
+          payload: {
+            numeroMina: null,
+          },
+        });
+      }
 
       alert(
         `El CAEX ${equipoSeleccionado.numeroMina} era el backup y quedó fuera de servicio. Actualmente no hay backup asignado.`,
@@ -3053,6 +3112,16 @@ const averiasCerradasEnTurno = averias.filter(
         cargarEquipos(),
         cargarBackup(),
       ]);
+
+      if (canalBackupBroadcastRef.current) {
+        await canalBackupBroadcastRef.current.send({
+          type: "broadcast",
+          event: "backup_changed",
+          payload: {
+            numeroMina,
+          },
+        });
+      }
 
       setVista("inicio");
     } catch (error) {
