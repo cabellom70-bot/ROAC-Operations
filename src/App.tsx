@@ -489,6 +489,8 @@ function App() {
   const sincronizacionEnCursoRef = useRef(false);
   const estadoRealtimeRef = useRef("CONECTANDO");
   const canalBackupBroadcastRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const canalAveriasBroadcastRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const averiasAlertadasRef = useRef<Set<number>>(new Set());
 
   const puedeModificar = rol === "operaciones";
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
@@ -968,6 +970,12 @@ function App() {
       averiaLocalPendienteRef.current = null;
       return;
     }
+
+    if (averiasAlertadasRef.current.has(registro.id)) {
+      return;
+    }
+
+    averiasAlertadasRef.current.add(registro.id);
 
     const { data: equipoDb, error } = await supabase
       .from("equipos")
@@ -1653,6 +1661,79 @@ function App() {
     return () => {
       canalBackupBroadcastRef.current = null;
       void supabase.removeChannel(canalBackup);
+    };
+  }, [sesion?.user.id, rol]);
+
+
+  useEffect(() => {
+    if (!sesion || !rol) {
+      return;
+    }
+
+    const canalAverias = supabase
+      .channel("roac-averias-broadcast", {
+        config: {
+          broadcast: {
+            self: false,
+          },
+        },
+      })
+      .on(
+        "broadcast",
+        {
+          event: "averia_changed",
+        },
+        (mensaje) => {
+          const payload = mensaje.payload as {
+            accion?: "NUEVA_AVERIA" | "EQUIPO_OPERATIVO";
+            averiaId?: number;
+            equipoId?: number;
+            sistema?: string;
+            informadoPor?: string;
+            trabajoRealizado?: string;
+          };
+
+          console.log("[ROAC Broadcast] averia_changed:", payload);
+
+          // Los datos cambian de inmediato en los demás dispositivos.
+          void cargarAverias();
+          void cargarEquipos();
+
+          if (
+            payload.accion === "NUEVA_AVERIA" &&
+            payload.averiaId &&
+            payload.equipoId
+          ) {
+            void manejarNuevaAveriaRealtime({
+              id: payload.averiaId,
+              equipo_id: payload.equipoId,
+              sistema: payload.sistema,
+              informado_por: payload.informadoPor,
+            });
+          }
+
+          if (
+            payload.accion === "EQUIPO_OPERATIVO" &&
+            payload.averiaId &&
+            payload.equipoId
+          ) {
+            void manejarEquipoOperativoRealtime({
+              id: payload.averiaId,
+              equipo_id: payload.equipoId,
+              trabajo_realizado: payload.trabajoRealizado,
+            });
+          }
+        },
+      )
+      .subscribe((status) => {
+        console.log("[ROAC Broadcast] estado averías:", status);
+      });
+
+    canalAveriasBroadcastRef.current = canalAverias;
+
+    return () => {
+      canalAveriasBroadcastRef.current = null;
+      void supabase.removeChannel(canalAverias);
     };
   }, [sesion?.user.id, rol]);
 
@@ -2675,6 +2756,22 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
+    // Aviso Realtime dedicado: actualización + alerta visual/sonora inmediata
+    // en los demás dispositivos, sin esperar la reconciliación de seguridad.
+    if (canalAveriasBroadcastRef.current) {
+      await canalAveriasBroadcastRef.current.send({
+        type: "broadcast",
+        event: "averia_changed",
+        payload: {
+          accion: "NUEVA_AVERIA",
+          averiaId: averiaDb.id,
+          equipoId: equipoDb.id,
+          sistema: datos.sistema,
+          informadoPor: datos.informadoPor,
+        },
+      });
+    }
+
     // 4. Si el equipo era backup, eliminar la asignación
     if (numeroBackup === equipoSeleccionado.numeroMina) {
       const { error: errorBackup } = await supabase
@@ -2973,7 +3070,7 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
-    const { error: errorEquipo } = await supabase
+    const { data: equipoCerradoDb, error: errorEquipo } = await supabase
       .from("equipos")
       .update({
         estado: "Operativo",
@@ -2981,9 +3078,11 @@ const averiasCerradasEnTurno = averias.filter(
       .eq(
         "numero_mina",
         averiaActual.equipo.numeroMina,
-      );
+      )
+      .select("id")
+      .single();
 
-    if (errorEquipo) {
+    if (errorEquipo || !equipoCerradoDb) {
       console.error(errorEquipo);
       alert(
         "La avería se cerró, pero no se pudo restaurar el equipo a Operativo.",
@@ -2997,6 +3096,19 @@ const averiasCerradasEnTurno = averias.filter(
       "EQUIPO_OPERATIVO",
       averiaSeleccionadaId,
     );
+
+    if (canalAveriasBroadcastRef.current) {
+      await canalAveriasBroadcastRef.current.send({
+        type: "broadcast",
+        event: "averia_changed",
+        payload: {
+          accion: "EQUIPO_OPERATIVO",
+          averiaId: averiaSeleccionadaId,
+          equipoId: equipoCerradoDb.id,
+          trabajoRealizado,
+        },
+      });
+    }
 
     const horaCierre = obtenerHoraActual();
 
