@@ -664,6 +664,165 @@ function App() {
     }
   }
 
+  function obtenerDeviceIdPersistente() {
+    const clave = "roac_device_id";
+    const existente = window.localStorage.getItem(clave);
+
+    if (existente) {
+      return existente;
+    }
+
+    const nuevo =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? `roac-device-${crypto.randomUUID()}`
+        : `roac-device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    window.localStorage.setItem(clave, nuevo);
+    return nuevo;
+  }
+
+
+  async function guardarSuscripcionPush(
+    suscripcion: PushSubscription,
+  ) {
+    if (!sesion) {
+      return false;
+    }
+
+    const datos = suscripcion.toJSON();
+    const endpoint = datos.endpoint;
+
+    if (!endpoint) {
+      console.error("La suscripción Push no contiene endpoint.");
+      return false;
+    }
+
+    const deviceId = obtenerDeviceIdPersistente();
+    const ahora = new Date().toISOString();
+
+    /*
+      Migración segura:
+      si este navegador ya tenía una fila antigua identificada solo
+      por endpoint, la reutilizamos y le asignamos device_id.
+      Así no creamos un registro adicional en el primer arranque
+      de esta nueva versión.
+    */
+    const { data: filaEndpoint, error: errorBuscarEndpoint } = await supabase
+      .from("push_subscriptions")
+      .select("id, device_id")
+      .eq("endpoint", endpoint)
+      .maybeSingle();
+
+    if (errorBuscarEndpoint) {
+      console.error(
+        "Error buscando la suscripción Push existente:",
+        errorBuscarEndpoint,
+      );
+      return false;
+    }
+
+    if (filaEndpoint) {
+      const { error: errorActualizar } = await supabase
+        .from("push_subscriptions")
+        .update({
+          user_id: sesion.user.id,
+          device_id: deviceId,
+          endpoint,
+          p256dh: datos.keys?.p256dh,
+          auth: datos.keys?.auth,
+          user_agent: navigator.userAgent,
+          activo: true,
+          updated_at: ahora,
+        })
+        .eq("id", filaEndpoint.id);
+
+      if (errorActualizar) {
+        console.error(
+          "Error migrando/actualizando la suscripción Push:",
+          errorActualizar,
+        );
+        return false;
+      }
+
+      return true;
+    }
+
+    /*
+      A partir de aquí device_id es la identidad estable del navegador.
+      Si Apple/Chrome renuevan el endpoint, se actualiza ESTA MISMA fila.
+    */
+    const { error: errorUpsert } = await supabase
+      .from("push_subscriptions")
+      .upsert(
+        {
+          user_id: sesion.user.id,
+          device_id: deviceId,
+          endpoint,
+          p256dh: datos.keys?.p256dh,
+          auth: datos.keys?.auth,
+          user_agent: navigator.userAgent,
+          activo: true,
+          updated_at: ahora,
+        },
+        {
+          onConflict: "device_id",
+        },
+      );
+
+    if (errorUpsert) {
+      console.error(
+        "Error guardando la suscripción Push por device_id:",
+        errorUpsert,
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+
+  async function sincronizarSuscripcionPushExistente() {
+    if (
+      !sesion ||
+      !("serviceWorker" in navigator) ||
+      !("PushManager" in window) ||
+      !("Notification" in window) ||
+      Notification.permission !== "granted"
+    ) {
+      return;
+    }
+
+    if (esIOS() && !esModoInstalado()) {
+      return;
+    }
+
+    try {
+      const registro = await navigator.serviceWorker.register("/sw.js");
+      await navigator.serviceWorker.ready;
+
+      const suscripcion = await registro.pushManager.getSubscription();
+
+      if (!suscripcion) {
+        return;
+      }
+
+      const guardada = await guardarSuscripcionPush(suscripcion);
+
+      if (guardada) {
+        setEstadoPush("ACTIVA");
+        console.log(
+          "[ROAC Push] Suscripción actual sincronizada con device_id.",
+        );
+      }
+    } catch (error) {
+      console.error(
+        "No se pudo sincronizar la suscripción Push existente:",
+        error,
+      );
+    }
+  }
+
+
   async function activarNotificacionesPush() {
     if (!sesion) {
       return;
@@ -717,27 +876,9 @@ function App() {
         });
       }
 
-      const datos = suscripcion.toJSON();
+      const guardada = await guardarSuscripcionPush(suscripcion);
 
-      const { error } = await supabase
-        .from("push_subscriptions")
-        .upsert(
-          {
-            user_id: sesion.user.id,
-            endpoint: datos.endpoint,
-            p256dh: datos.keys?.p256dh,
-            auth: datos.keys?.auth,
-            user_agent: navigator.userAgent,
-            activo: true,
-            updated_at: new Date().toISOString(),
-          },
-          {
-            onConflict: "endpoint",
-          },
-        );
-
-      if (error) {
-        console.error("Error guardando suscripción push:", error);
+      if (!guardada) {
         alert("No se pudo registrar este dispositivo para notificaciones.");
         setEstadoPush("ERROR");
         return;
@@ -1514,6 +1655,7 @@ function App() {
     }
 
     void comprobarEstadoPush();
+    void sincronizarSuscripcionPushExistente();
   }, [sesion?.user.id, rol]);
 
   useEffect(() => {
