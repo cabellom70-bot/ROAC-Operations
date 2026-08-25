@@ -486,6 +486,8 @@ function App() {
     sistema: string;
     vence: number;
   } | null>(null);
+  const sincronizacionEnCursoRef = useRef(false);
+  const estadoRealtimeRef = useRef("CONECTANDO");
 
   const puedeModificar = rol === "operaciones";
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
@@ -1302,6 +1304,33 @@ function App() {
     setHistorialTurnos(convertidos);
   }
 
+  async function sincronizarDatosOperacionales(
+    motivo: string = "manual",
+  ) {
+    if (!sesion || !rol || sincronizacionEnCursoRef.current) {
+      return;
+    }
+
+    sincronizacionEnCursoRef.current = true;
+
+    try {
+      await Promise.all([
+        cargarEquipos(),
+        cargarAverias(),
+        cargarMantenimientos(),
+        cargarIntervenciones(),
+        cargarBackup(),
+      ]);
+
+      console.log(`[ROAC Sync] Sincronización completada (${motivo}).`);
+    } catch (error) {
+      console.error(`[ROAC Sync] Error de sincronización (${motivo}):`, error);
+    } finally {
+      sincronizacionEnCursoRef.current = false;
+    }
+  }
+
+
   function obtenerAveriasRelevantesParaTurno(turno: TurnoActual) {
     const { inicio, fin } = obtenerIntervaloTurno(turno);
 
@@ -1592,126 +1621,292 @@ function App() {
 
   useEffect(() => {
     if (!sesion || !rol) {
+      estadoRealtimeRef.current = "CERRADO";
+      setEstadoRealtime("CERRADO");
       return;
     }
 
-    setEstadoRealtime("CONECTANDO");
+    let desmontado = false;
+    let canalActual: ReturnType<typeof supabase.channel> | null = null;
+    let timerReconexion: number | null = null;
+    let intentoReconexion = 0;
 
-    const canal = supabase
-      .channel("roac-operations-realtime")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "averias",
-        },
-        (payload) => {
-          console.log("[ROAC Realtime] averias:", payload);
+    const limpiarTimerReconexion = () => {
+      if (timerReconexion !== null) {
+        window.clearTimeout(timerReconexion);
+        timerReconexion = null;
+      }
+    };
 
-          void cargarAverias();
+    const retirarCanalActual = async () => {
+      if (!canalActual) {
+        return;
+      }
 
-          if (payload.eventType === "INSERT") {
-            void manejarNuevaAveriaRealtime(
-              payload.new as {
-                id?: number;
-                equipo_id?: number;
-                sistema?: string;
-                informado_por?: string;
-              },
-            );
+      const canalAnterior = canalActual;
+      canalActual = null;
+
+      try {
+        await supabase.removeChannel(canalAnterior);
+      } catch (error) {
+        console.warn("[ROAC Realtime] Error retirando canal anterior:", error);
+      }
+    };
+
+    const programarReconexion = (motivo: string) => {
+      if (
+        desmontado ||
+        !navigator.onLine ||
+        document.visibilityState === "hidden"
+      ) {
+        return;
+      }
+
+      limpiarTimerReconexion();
+
+      const espera = Math.min(15_000, 2_000 * 2 ** intentoReconexion);
+      intentoReconexion += 1;
+
+      console.warn(
+        `[ROAC Realtime] Reconexión programada en ${espera} ms (${motivo}).`,
+      );
+
+      timerReconexion = window.setTimeout(() => {
+        void crearCanalRealtime(`reconexion:${motivo}`);
+      }, espera);
+    };
+
+    const crearCanalRealtime = async (motivo: string) => {
+      if (desmontado || !navigator.onLine) {
+        return;
+      }
+
+      limpiarTimerReconexion();
+      await retirarCanalActual();
+
+      if (desmontado) {
+        return;
+      }
+
+      estadoRealtimeRef.current = "CONECTANDO";
+      setEstadoRealtime("CONECTANDO");
+
+      const canal = supabase
+        .channel(`roac-operations-realtime-${Date.now()}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "averias",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] averias:", payload);
+
+            // Actualización inmediata de datos.
+            void cargarAverias();
+
+            // Se conserva EXACTAMENTE la alerta visual + sonido
+            // de nueva avería para los demás dispositivos.
+            if (payload.eventType === "INSERT") {
+              void manejarNuevaAveriaRealtime(
+                payload.new as {
+                  id?: number;
+                  equipo_id?: number;
+                  sistema?: string;
+                  informado_por?: string;
+                },
+              );
+            }
+
+            // Se conserva EXACTAMENTE la confirmación visual + sonido
+            // cuando la avería queda cerrada / equipo operativo.
+            if (
+              payload.eventType === "UPDATE" &&
+              (payload.new as { estado_averia?: string }).estado_averia ===
+                "Cerrada"
+            ) {
+              void manejarEquipoOperativoRealtime(
+                payload.new as {
+                  id?: number;
+                  equipo_id?: number;
+                  trabajo_realizado?: string;
+                },
+              );
+            }
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "equipos",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] equipos:", payload);
+            void cargarEquipos();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "mantenimientos",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] mantenimientos:", payload);
+            void cargarMantenimientos();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "intervenciones_averia",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] intervenciones_averia:", payload);
+            void cargarIntervenciones();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "configuracion",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] configuracion:", payload);
+            void cargarBackup();
+          },
+        )
+        .subscribe((status, error) => {
+          if (desmontado) {
+            return;
           }
 
-          if (
-            payload.eventType === "UPDATE" &&
-            (payload.new as { estado_averia?: string }).estado_averia === "Cerrada"
-          ) {
-            void manejarEquipoOperativoRealtime(
-              payload.new as {
-                id?: number;
-                equipo_id?: number;
-                trabajo_realizado?: string;
-              },
-            );
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "equipos",
-        },
-        (payload) => {
-          console.log("[ROAC Realtime] equipos:", payload);
-          void cargarEquipos();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "mantenimientos",
-        },
-        (payload) => {
-          console.log("[ROAC Realtime] mantenimientos:", payload);
-          void cargarMantenimientos();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "intervenciones_averia",
-        },
-        (payload) => {
-          console.log("[ROAC Realtime] intervenciones_averia:", payload);
-          void cargarIntervenciones();
-        },
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "configuracion",
-        },
-        (payload) => {
-          console.log("[ROAC Realtime] configuracion:", payload);
-          void cargarBackup();
-        },
-      )
-      .subscribe((status, error) => {
-        console.log("[ROAC Realtime] estado del canal:", status, error ?? "");
+          console.log(
+            `[ROAC Realtime] estado (${motivo}):`,
+            status,
+            error ?? "",
+          );
 
-        switch (status) {
-          case "SUBSCRIBED":
+          estadoRealtimeRef.current = status;
+
+          if (status === "SUBSCRIBED") {
             setEstadoRealtime("CONECTADO");
-            break;
+            intentoReconexion = 0;
+            limpiarTimerReconexion();
 
-          case "CHANNEL_ERROR":
+            // Al recuperar conexión, reconciliamos por si se perdió
+            // algún evento mientras el socket estaba fuera.
+            void sincronizarDatosOperacionales("realtime-conectado");
+            return;
+          }
+
+          if (status === "CHANNEL_ERROR") {
             setEstadoRealtime("ERROR");
-            break;
+            programarReconexion("CHANNEL_ERROR");
+            return;
+          }
 
-          case "TIMED_OUT":
+          if (status === "TIMED_OUT") {
             setEstadoRealtime("TIMEOUT");
-            break;
+            programarReconexion("TIMED_OUT");
+            return;
+          }
 
-          case "CLOSED":
+          if (status === "CLOSED") {
             setEstadoRealtime("CERRADO");
-            break;
+            programarReconexion("CLOSED");
+            return;
+          }
 
-          default:
-            setEstadoRealtime(status);
-            break;
+          setEstadoRealtime(status);
+        });
+
+      canalActual = canal;
+    };
+
+    const recuperar = (motivo: string) => {
+      if (desmontado || !navigator.onLine) {
+        return;
+      }
+
+      // Siempre recuperamos el estado verdadero de Supabase.
+      void sincronizarDatosOperacionales(motivo);
+
+      // Y si el socket no está suscrito, lo reconstruimos.
+      if (estadoRealtimeRef.current !== "SUBSCRIBED") {
+        void crearCanalRealtime(motivo);
+      }
+    };
+
+    const alVolverInternet = () => {
+      recuperar("online");
+    };
+
+    const alPerderInternet = () => {
+      limpiarTimerReconexion();
+      estadoRealtimeRef.current = "SIN_RED";
+      setEstadoRealtime("SIN RED");
+    };
+
+    const alCambiarVisibilidad = () => {
+      if (document.visibilityState === "visible") {
+        recuperar("visible");
+      }
+    };
+
+    const alRecuperarFoco = () => {
+      recuperar("focus");
+    };
+
+    /*
+      Realtime sigue siendo la vía PRINCIPAL e INSTANTÁNEA.
+      Este intervalo es solo un respaldo para impedir que un PC/teléfono
+      quede mostrando datos antiguos si el navegador pierde silenciosamente
+      un evento WebSocket.
+    */
+    const respaldo = window.setInterval(() => {
+      if (
+        !desmontado &&
+        navigator.onLine &&
+        document.visibilityState === "visible"
+      ) {
+        void sincronizarDatosOperacionales("respaldo-10s");
+
+        if (estadoRealtimeRef.current !== "SUBSCRIBED") {
+          void crearCanalRealtime("respaldo-10s");
         }
-      });
+      }
+    }, 10_000);
+
+    window.addEventListener("online", alVolverInternet);
+    window.addEventListener("offline", alPerderInternet);
+    window.addEventListener("focus", alRecuperarFoco);
+    document.addEventListener("visibilitychange", alCambiarVisibilidad);
+
+    void crearCanalRealtime("inicio");
 
     return () => {
-      void supabase.removeChannel(canal);
+      desmontado = true;
+      limpiarTimerReconexion();
+      window.clearInterval(respaldo);
+
+      window.removeEventListener("online", alVolverInternet);
+      window.removeEventListener("offline", alPerderInternet);
+      window.removeEventListener("focus", alRecuperarFoco);
+      document.removeEventListener("visibilitychange", alCambiarVisibilidad);
+
+      if (canalActual) {
+        void supabase.removeChannel(canalActual);
+        canalActual = null;
+      }
     };
   }, [sesion?.user.id, rol]);
 
