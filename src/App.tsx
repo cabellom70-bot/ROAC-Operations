@@ -33,9 +33,11 @@ type Vista =
 type RolUsuario = "operaciones" | "consulta";
 
 type TipoTurno = "Día" | "Noche";
+type BloqueTrabajo = "A/B" | "C/D";
 
 type TurnoActual = {
   tipo: TipoTurno;
+  bloqueTrabajo: BloqueTrabajo;
   horario: string;
   fechaCalendario: string;
   fechaLarga: string;
@@ -66,6 +68,7 @@ type StatusTurnoGuardado = {
   id: number;
   claveTurno: string;
   tipoTurno: TipoTurno;
+  bloqueTrabajo: BloqueTrabajo;
   rangoTurno: string;
   fechaInicio: string;
   fechaFin: string;
@@ -154,16 +157,56 @@ function sumarDiasCalendario(
   };
 }
 
+// Ciclo operacional de cuadrillas:
+// A/B trabaja 10 días y C/D descansa; luego se invierten por 10 días.
+// Referencia confirmada: A/B inicia ciclo activo el 06/09/2026 a las 08:00.
+const REFERENCIA_BLOQUE_AB = { year: 2026, month: 9, day: 6 };
+const DIAS_POR_BLOQUE = 10;
+const DIAS_CICLO_COMPLETO = DIAS_POR_BLOQUE * 2;
+
+function obtenerBloqueTrabajo(fecha: Date = new Date()): BloqueTrabajo {
+  const partes = obtenerPartesChile(fecha);
+  const minutos = partes.hour * 60 + partes.minute;
+
+  // El relevo de bloque ocurre a las 08:00 hora Chile.
+  // Antes de las 08:00 todavía corresponde al día operacional anterior.
+  const fechaOperacional =
+    minutos >= 8 * 60
+      ? { year: partes.year, month: partes.month, day: partes.day }
+      : sumarDiasCalendario(partes.year, partes.month, partes.day, -1);
+
+  const referenciaUtc = Date.UTC(
+    REFERENCIA_BLOQUE_AB.year,
+    REFERENCIA_BLOQUE_AB.month - 1,
+    REFERENCIA_BLOQUE_AB.day,
+  );
+  const fechaOperacionalUtc = Date.UTC(
+    fechaOperacional.year,
+    fechaOperacional.month - 1,
+    fechaOperacional.day,
+  );
+
+  const diferenciaDias = Math.floor(
+    (fechaOperacionalUtc - referenciaUtc) / 86_400_000,
+  );
+  const posicionCiclo =
+    ((diferenciaDias % DIAS_CICLO_COMPLETO) + DIAS_CICLO_COMPLETO) %
+    DIAS_CICLO_COMPLETO;
+
+  return posicionCiclo < DIAS_POR_BLOQUE ? "A/B" : "C/D";
+}
+
 
 function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
   const partes = obtenerPartesChile(fecha);
   const minutos = partes.hour * 60 + partes.minute;
 
-  // Día: 08:01 a 20:00
-  // Noche: 20:01 a 08:00
+  // Día: 08:00 a 19:59
+  // Noche: 20:00 a 07:59
+  // Cada minuto pertenece a un solo turno, sin solapamientos.
   const esTurnoDia =
-    minutos >= 8 * 60 + 1 &&
-    minutos <= 20 * 60;
+    minutos >= 8 * 60 &&
+    minutos < 20 * 60;
 
   const fechaCalendario = formatearFechaOperacional(
     partes.year,
@@ -195,9 +238,9 @@ function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
       day: partes.day,
     };
 
-    horaInicioTurno = "08:01";
-    horaFinTurno = "20:00";
-  } else if (minutos >= 20 * 60 + 1) {
+    horaInicioTurno = "08:00";
+    horaFinTurno = "19:59";
+  } else if (minutos >= 20 * 60) {
     inicio = {
       year: partes.year,
       month: partes.month,
@@ -211,8 +254,8 @@ function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
       1,
     );
 
-    horaInicioTurno = "20:01";
-    horaFinTurno = "08:00";
+    horaInicioTurno = "20:00";
+    horaFinTurno = "07:59";
   } else {
     inicio = sumarDiasCalendario(
       partes.year,
@@ -227,8 +270,8 @@ function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
       day: partes.day,
     };
 
-    horaInicioTurno = "20:01";
-    horaFinTurno = "08:00";
+    horaInicioTurno = "20:00";
+    horaFinTurno = "07:59";
   }
 
   const fechaInicioTurno = formatearFechaOperacional(
@@ -248,10 +291,11 @@ function obtenerTurnoActual(fecha: Date = new Date()): TurnoActual {
 
   return {
     tipo,
+    bloqueTrabajo: obtenerBloqueTrabajo(fecha),
     horario:
       tipo === "Día"
-        ? "08:01 a 20:00"
-        : "20:01 a 08:00",
+        ? "08:00 a 19:59"
+        : "20:00 a 07:59",
 
     // Esta fecha cambia con el calendario real,
     // aunque el turno noche continúe después de medianoche.
@@ -360,8 +404,8 @@ function esMinutoEntregaTurno() {
   const partes = obtenerPartesChile(new Date());
 
   return (
-    (partes.hour === 8 && partes.minute === 0) ||
-    (partes.hour === 20 && partes.minute === 0)
+    (partes.hour === 7 && partes.minute === 59) ||
+    (partes.hour === 19 && partes.minute === 59)
   );
 }
 
@@ -1442,6 +1486,7 @@ function App() {
       id: registro.id,
       claveTurno: registro.clave_turno,
       tipoTurno: registro.tipo_turno,
+      bloqueTrabajo: obtenerBloqueTrabajo(new Date(registro.fecha_inicio)),
       rangoTurno: registro.rango_turno,
       fechaInicio: registro.fecha_inicio,
       fechaFin: registro.fecha_fin,
@@ -1665,7 +1710,7 @@ function App() {
 
     actualizarTurno();
 
-    // Actualización frecuente para que el cambio 08:01 / 20:01
+    // Actualización frecuente para que el cambio 08:00 / 20:00
     // ocurra sin recargar la página.
     const intervalo = window.setInterval(actualizarTurno, 30_000);
 
@@ -2393,7 +2438,11 @@ const averiasCerradasEnTurno = averias.filter(
     pdf.text("ROAC OPERATIONS · EPSA", x, y);
     y += 6;
     pdf.setFontSize(16);
-    pdf.text(`Informe de turno ${informeTurno.turno.tipo}`, x, y);
+    pdf.text(
+      `Informe de turno ${informeTurno.turno.tipo} · ${informeTurno.turno.bloqueTrabajo}`,
+      x,
+      y,
+    );
     y += 6;
     pdf.setFont("helvetica", "normal");
     pdf.setFontSize(9);
@@ -2479,7 +2528,10 @@ const averiasCerradasEnTurno = averias.filter(
     const fecha = new Date(informeTurno.generadoEn)
       .toLocaleDateString("en-CA", { timeZone: "America/Santiago" })
       .replaceAll("-", "");
-    pdf.save(`ROAC-Informe-${informeTurno.turno.tipo.toLowerCase()}-${fecha}.pdf`);
+    const bloqueArchivo = informeTurno.turno.bloqueTrabajo.replace("/", "-");
+    pdf.save(
+      `ROAC-Informe-${bloqueArchivo}-${informeTurno.turno.tipo.toLowerCase()}-${fecha}.pdf`,
+    );
   }
 
   function obtenerUltimoAvanceInforme(averiaId: number) {
@@ -5260,9 +5312,9 @@ const averiasCerradasEnTurno = averias.filter(
 
       {vista !== "informe-turno" && (
       <header className="app-header roac-header-background">
-        {/* TURNO: DÍA / NOCHE */}
+        {/* TURNO HORARIO + BLOQUE DE TRABAJO */}
         <div className="header-overlay-shift">
-          <span>{turnoActual.tipo}</span>
+          <span>{turnoActual.tipo} · {turnoActual.bloqueTrabajo}</span>
           <span
             className="header-overlay-shift-icon"
             aria-hidden="true"
@@ -5668,7 +5720,9 @@ const averiasCerradasEnTurno = averias.filter(
             Resumen operacional
           </p>
 
-          <h2>Status turno {turnoActual.tipo}</h2>
+          <h2>
+            Status turno {turnoActual.tipo} · {turnoActual.bloqueTrabajo}
+          </h2>
 
           <p className="shift-date">
             {turnoActual.rangoTurno}
@@ -6456,7 +6510,7 @@ const averiasCerradasEnTurno = averias.filter(
                               fontSize: "14px",
                             }}
                           >
-                            Status turno {statusHistorico.tipoTurno}
+                            Status turno {statusHistorico.tipoTurno} · {statusHistorico.bloqueTrabajo}
                           </strong>
                           <small style={{ color: "#6b7b90" }}>
                             {statusHistorico.rangoTurno}
@@ -6665,7 +6719,9 @@ const averiasCerradasEnTurno = averias.filter(
                 >
                   ROAC OPERATIONS · EPSA
                 </p>
-                <h2>Informe de turno {informeTurno.turno.tipo}</h2>
+                <h2>
+                  Informe de turno {informeTurno.turno.tipo} · {informeTurno.turno.bloqueTrabajo}
+                </h2>
                 <p>{informeTurno.turno.rangoTurno}</p>
               </div>
 
