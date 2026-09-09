@@ -13,6 +13,10 @@ export type SistemaAveria =
   | "Cabina"
   | "Estructural"
   | "Operacional"
+  | "Aire acondicionado"
+  | "Elementos de desgaste"
+  | "Cambio de componente mayor"
+  | "Espera de repuesto"
   | "Otro";
 
 export type EstadoAveria =
