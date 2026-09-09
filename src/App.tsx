@@ -11,7 +11,7 @@ import RegistrarAveria, {
   type DatosNuevaAveria,
 } from "./pages/RegistrarAveria";
 
-import type { Averia } from "./types/Averia";
+import type { Averia, SistemaAveria } from "./types/Averia";
 import type { Equipo } from "./types/Equipo";
 import type { Mantenimiento } from "./types/Mantenimiento";
 import type { IntervencionAveria } from "./types/IntervencionAveria";
@@ -3026,6 +3026,73 @@ const averiasCerradasEnTurno = averias.filter(
     setAveriaSeleccionadaId(id);
     setVista("detalle-averia");
   }
+  async function validarPinModificarAveria(pin: string) {
+    const { data, error } = await supabase.rpc(
+      "validar_pin_modificar_averia",
+      {
+        pin_ingresado: pin,
+      },
+    );
+
+    if (error) {
+      console.error(
+        "Error al validar PIN de modificación:",
+        error,
+      );
+      throw new Error("No se pudo validar el PIN.");
+    }
+
+    return data === true;
+  }
+
+  async function modificarAveriaConPin(datos: {
+    pin: string;
+    sistema: SistemaAveria;
+    ubicacion: string;
+    detalleInicial: string;
+    informadoPor: string;
+    fechaAviso: string;
+    horaAviso: string;
+  }) {
+    if (!exigirPermiso()) {
+      throw new Error("Sin permiso para modificar averías.");
+    }
+
+    if (averiaSeleccionadaId === null) {
+      throw new Error("No hay una avería seleccionada.");
+    }
+
+    const [year, mes, dia] = datos.fechaAviso.split("-");
+    const fechaChile = crearFechaChile(
+      `${dia}/${mes}/${year}`,
+      datos.horaAviso,
+    );
+
+    if (Number.isNaN(fechaChile.getTime())) {
+      throw new Error("Fecha u hora de aviso inválida.");
+    }
+
+    const { error } = await supabase.rpc(
+      "modificar_averia_con_pin",
+      {
+        p_averia_id: averiaSeleccionadaId,
+        p_pin: datos.pin,
+        p_sistema: datos.sistema,
+        p_ubicacion: datos.ubicacion,
+        p_detalle_inicial: datos.detalleInicial,
+        p_informado_por: datos.informadoPor,
+        p_fecha_aviso: fechaChile.toISOString(),
+      },
+    );
+
+    if (error) {
+      console.error("Error al modificar avería:", error);
+      throw error;
+    }
+
+    await cargarAverias();
+  }
+
   async function tomarAveria(responsable: string) {
   if (!exigirPermiso()) {
     return;
@@ -7237,6 +7304,8 @@ const averiasCerradasEnTurno = averias.filter(
             onRegistrarAvance={registrarAvanceAveria}
             onTomarContinuidad={tomarContinuidadAveria}
             onCerrar={cerrarAveria}
+            onValidarPin={validarPinModificarAveria}
+            onModificarAveria={modificarAveriaConPin}
           />
         )}
 
