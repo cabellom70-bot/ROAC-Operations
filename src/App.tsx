@@ -21,6 +21,9 @@ type Vista =
   | "inicio"
   | "averias"
   | "status"
+  | "historial"
+  | "historial-equipo"
+  | "detalle-averia-historial"
   | "informe-turno"
   | "seleccionar-equipo"
   | "registrar-averia"
@@ -479,6 +482,8 @@ function App() {
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
   const [intervenciones, setIntervenciones] = useState<IntervencionAveria[]>([]);
   const [equipoSeleccionado, setEquipoSeleccionado] =
+    useState<Equipo | null>(null);
+  const [equipoHistorialSeleccionado, setEquipoHistorialSeleccionado] =
     useState<Equipo | null>(null);
   const [averiaSeleccionadaId, setAveriaSeleccionadaId] =
     useState<number | null>(null);
@@ -2556,6 +2561,7 @@ const averiasCerradasEnTurno = averias.filter(
 
   function irAInicio() {
     setEquipoSeleccionado(null);
+    setEquipoHistorialSeleccionado(null);
     setAveriaSeleccionadaId(null);
     setMantenimientoSeleccionadoId(null);
     setMotivoMantenimiento("");
@@ -2813,6 +2819,28 @@ const averiasCerradasEnTurno = averias.filter(
       console.error(error);
       alert("Ocurrió un error al finalizar el mantenimiento.");
     }
+  }
+
+  function abrirHistorial() {
+    setEquipoHistorialSeleccionado(null);
+    setAveriaSeleccionadaId(null);
+    setVista("historial");
+  }
+
+  function seleccionarEquipoHistorial(equipo: Equipo) {
+    setEquipoHistorialSeleccionado(equipo);
+    setAveriaSeleccionadaId(null);
+    setVista("historial-equipo");
+  }
+
+  function abrirDetalleAveriaHistorial(id: number) {
+    setAveriaSeleccionadaId(id);
+    setVista("detalle-averia-historial");
+  }
+
+  function volverDesdeDetalleHistorial() {
+    setAveriaSeleccionadaId(null);
+    setVista("historial-equipo");
   }
 
   function continuarConEquipo() {
@@ -7280,6 +7308,180 @@ const averiasCerradasEnTurno = averias.filter(
         </section>
       )}
 
+      {vista === "historial" && (
+        <section className="equipment-selector">
+          <button
+            type="button"
+            className="back-button"
+            onClick={irAInicio}
+          >
+            ← Volver a inicio
+          </button>
+
+          <div className="selector-header">
+            <p className="eyebrow eyebrow-dark">Historial técnico</p>
+            <h2>Selecciona un equipo</h2>
+            <p>
+              Consulta todas las averías registradas y la secuencia de atención de cada técnico.
+            </p>
+          </div>
+
+          <div className="equipment-grid">
+            {equipos.map((equipo) => (
+              <div key={equipo.numeroMina}>
+                <EquipoCard
+                  numeroMina={equipo.numeroMina}
+                  numeroInterno={equipo.numeroInterno}
+                  modelo={equipo.modelo}
+                  estado={equipo.estado}
+                  seleccionado={false}
+                  onClick={() => seleccionarEquipoHistorial(equipo)}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {vista === "historial-equipo" &&
+        equipoHistorialSeleccionado && (
+          <section className="section screen-section">
+            <button
+              type="button"
+              className="back-button"
+              onClick={abrirHistorial}
+            >
+              ← Volver a equipos
+            </button>
+
+            <div className="screen-header" style={{ marginTop: "14px" }}>
+              <div>
+                <p className="eyebrow eyebrow-dark">Historial del equipo</p>
+                <h2>
+                  {equipoHistorialSeleccionado.numeroMina} (
+                  {equipoHistorialSeleccionado.numeroInterno})
+                </h2>
+                <p style={{ margin: "4px 0 0", color: "#64748b" }}>
+                  {equipoHistorialSeleccionado.modelo}
+                </p>
+              </div>
+
+              <span className="count-badge">
+                {
+                  averias.filter(
+                    (averia) =>
+                      averia.equipo.numeroMina ===
+                      equipoHistorialSeleccionado.numeroMina,
+                  ).length
+                }
+              </span>
+            </div>
+
+            {averias.filter(
+              (averia) =>
+                averia.equipo.numeroMina ===
+                equipoHistorialSeleccionado.numeroMina,
+            ).length === 0 ? (
+              <p className="empty-state">
+                Este equipo todavía no tiene averías registradas.
+              </p>
+            ) : (
+              <div className="open-faults">
+                {averias
+                  .filter(
+                    (averia) =>
+                      averia.equipo.numeroMina ===
+                      equipoHistorialSeleccionado.numeroMina,
+                  )
+                  .map((averia) => (
+                    <button
+                      type="button"
+                      className="fault-card fault-card-button"
+                      key={averia.id}
+                      onClick={() =>
+                        abrirDetalleAveriaHistorial(averia.id)
+                      }
+                    >
+                      <div className="fault-card-header">
+                        <div>
+                          <h3>Avería #{averia.id}</h3>
+                          <p>{formatearFechaHoraChile(averia.fechaAviso)}</p>
+                        </div>
+
+                        <span className="fault-badge">
+                          {averia.estadoAveria}
+                        </span>
+                      </div>
+
+                      <p className="fault-type">
+                        Sistema: {averia.sistema}
+                      </p>
+
+                      {averia.ubicacion && (
+                        <p className="fault-location">
+                          Ubicación: {averia.ubicacion}
+                        </p>
+                      )}
+
+                      {averia.detalleInicial && (
+                        <p className="fault-description">
+                          {averia.detalleInicial}
+                        </p>
+                      )}
+
+                      {averia.estadoAveria === "Cerrada" &&
+                        averia.fechaCierre && (
+                          <div
+                            className="maintenance-duration"
+                            style={{ marginTop: "12px" }}
+                          >
+                            <small>TIEMPO FUERA DE SERVICIO</small>
+                            <strong>
+                              {formatearTiempoFueraServicio(
+                                averia.fechaAviso,
+                                averia.fechaCierre,
+                              )}
+                            </strong>
+                          </div>
+                        )}
+
+                      <div className="fault-footer">
+                        <span>
+                          {averia.estadoAveria === "Cerrada"
+                            ? `Operativo: ${formatearFechaHoraChile(
+                                averia.fechaCierre,
+                              )}`
+                            : "Avería en curso"}
+                        </span>
+                        <span>Ver detalle →</span>
+                      </div>
+                    </button>
+                  ))}
+              </div>
+            )}
+          </section>
+        )}
+
+      {vista === "detalle-averia-historial" &&
+        averiaSeleccionada && (
+          <DetalleAveria
+            averia={averiaSeleccionada}
+            intervenciones={intervenciones.filter(
+              (intervencion) =>
+                intervencion.averiaId === averiaSeleccionada.id,
+            )}
+            puedeModificar={false}
+            modoHistorial
+            onVolver={volverDesdeDetalleHistorial}
+            onTomar={tomarAveria}
+            onRegistrarAvance={registrarAvanceAveria}
+            onTomarContinuidad={tomarContinuidadAveria}
+            onCerrar={cerrarAveria}
+            onValidarPin={validarPinModificarAveria}
+            onModificarAveria={modificarAveriaConPin}
+          />
+        )}
+
       {vista === "registrar-averia" &&
         puedeModificar &&
         equipoSeleccionado && (
@@ -7312,6 +7514,8 @@ const averiasCerradasEnTurno = averias.filter(
       {vista !== "seleccionar-equipo" &&
         vista !== "registrar-averia" &&
         vista !== "detalle-averia" &&
+        vista !== "historial-equipo" &&
+        vista !== "detalle-averia-historial" &&
         vista !== "informe-turno" &&
         vista !== "seleccionar-backup" &&
         vista !== "seleccionar-equipo-mantenimiento" &&
@@ -7355,6 +7559,19 @@ const averiasCerradasEnTurno = averias.filter(
             >
               <span>▤</span>
               Status
+            </button>
+
+            <button
+              type="button"
+              className={
+                vista === "historial"
+                  ? "navigation-button navigation-button-active"
+                  : "navigation-button"
+              }
+              onClick={abrirHistorial}
+            >
+              <span>◷</span>
+              Historial
             </button>
           </nav>
         )}

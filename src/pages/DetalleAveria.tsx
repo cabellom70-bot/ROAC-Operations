@@ -7,6 +7,7 @@ type DetalleAveriaProps = {
   averia: Averia;
   intervenciones: IntervencionAveria[];
   puedeModificar: boolean;
+  modoHistorial?: boolean;
   onVolver: () => void;
   onTomar: (responsable: string) => void | Promise<void>;
   onRegistrarAvance: (
@@ -115,6 +116,7 @@ function DetalleAveria({
   averia,
   intervenciones,
   puedeModificar,
+  modoHistorial = false,
   onVolver,
   onTomar,
   onRegistrarAvance,
@@ -292,7 +294,8 @@ La corrección quedará registrada en la auditoría.`,
 
   const mostrarHistorial =
     intervenciones.length > 0 &&
-    (averia.estadoAveria === "En atención" ||
+    (modoHistorial ||
+      averia.estadoAveria === "En atención" ||
       averia.estadoAveria === "Cerrada");
 
   return (
@@ -302,13 +305,13 @@ La corrección quedará registrada en la auditoría.`,
         className="back-button"
         onClick={onVolver}
       >
-        ← Volver a averías
+        {modoHistorial ? "← Volver al historial" : "← Volver a averías"}
       </button>
 
       <div className="detail-header">
         <div>
           <p className="eyebrow eyebrow-dark">
-            Detalle de avería
+            {modoHistorial ? "Historial de avería" : "Detalle de avería"}
           </p>
 
           <h2>
@@ -348,9 +351,20 @@ La corrección quedará registrada en la auditoría.`,
         </p>
 
         <p>
-          <span>Hora del aviso</span>
-          <strong>{averia.horaAviso}</strong>
+          <span>{modoHistorial ? "Fecha y hora del aviso" : "Hora del aviso"}</span>
+          <strong>
+            {modoHistorial
+              ? formatearFechaHora(averia.fechaAviso)
+              : averia.horaAviso}
+          </strong>
         </p>
+
+        {modoHistorial && averia.fechaCierre && (
+          <p>
+            <span>Fecha y hora operativo</span>
+            <strong>{formatearFechaHora(averia.fechaCierre)}</strong>
+          </p>
+        )}
       </div>
 
       {averia.detalleInicial && (
