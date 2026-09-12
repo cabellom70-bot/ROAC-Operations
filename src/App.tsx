@@ -549,7 +549,7 @@ function App() {
   const [historialTurnos, setHistorialTurnos] = useState<StatusTurnoGuardado[]>([]);
   const [informeTurno, setInformeTurno] = useState<InformeTurnoSnapshot | null>(null);
   const [claveHistorialAbierto, setClaveHistorialAbierto] = useState<string | null>(null);
-  const [mostrarHistorialCompleto, setMostrarHistorialCompleto] = useState(false);
+  const [mesHistorialAbierto, setMesHistorialAbierto] = useState<string | null>(null);
   const [datosOperacionalesListos, setDatosOperacionalesListos] = useState(false);
 
   async function cargarPerfil(userId: string) {
@@ -2343,9 +2343,41 @@ const averiasCerradasEnTurno = averias.filter(
     (status) => status.claveTurno !== turnoActual.claveTurno,
   );
 
-  const historialTurnosVisibles = mostrarHistorialCompleto
-    ? historialTurnosCerrados
-    : historialTurnosCerrados.slice(0, 10);
+  const historialTurnosRecientes = historialTurnosCerrados.slice(0, 10);
+  const historialTurnosArchivados = historialTurnosCerrados.slice(10);
+
+  const historialTurnosPorMes = historialTurnosArchivados.reduce(
+    (grupos, status) => {
+      const partes = obtenerPartesChile(new Date(status.fechaInicio));
+      const claveMes = `${partes.year}-${String(partes.month).padStart(2, "0")}`;
+
+      if (!grupos[claveMes]) {
+        grupos[claveMes] = [];
+      }
+
+      grupos[claveMes].push(status);
+      return grupos;
+    },
+    {} as Record<string, StatusTurnoGuardado[]>,
+  );
+
+  const mesesHistorial = Object.entries(historialTurnosPorMes).map(
+    ([claveMes, turnos]) => {
+      const fechaReferencia = new Date(turnos[0].fechaInicio);
+      const etiquetaMes = new Intl.DateTimeFormat("es-CL", {
+        timeZone: ZONA_HORARIA_OPERACIONAL,
+        month: "long",
+        year: "numeric",
+      }).format(fechaReferencia);
+
+      return {
+        claveMes,
+        etiquetaMes:
+          etiquetaMes.charAt(0).toUpperCase() + etiquetaMes.slice(1),
+        turnos,
+      };
+    },
+  );
 
 
   function generarInformeTurnoActual() {
@@ -6562,216 +6594,510 @@ const averiasCerradasEnTurno = averias.filter(
                 automáticamente en el próximo cambio de turno.
               </p>
             ) : (
-              <div style={{ display: "grid", gap: "10px" }}>
-                {historialTurnosVisibles.map((statusHistorico) => {
-                  const abierto =
-                    claveHistorialAbierto === statusHistorico.claveTurno;
+              <div style={{ display: "grid", gap: "18px" }}>
+                <div>
+                  <strong
+                    style={{
+                      display: "block",
+                      marginBottom: "10px",
+                      color: "#213a59",
+                      fontSize: "14px",
+                    }}
+                  >
+                    Turnos recientes
+                  </strong>
 
-                  return (
-                    <article
-                      key={statusHistorico.claveTurno}
-                      style={{
-                        border: "1px solid #d9e3ef",
-                        borderRadius: "14px",
-                        background: "#ffffff",
-                        overflow: "hidden",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setClaveHistorialAbierto(
-                            abierto ? null : statusHistorico.claveTurno,
-                          )
-                        }
-                        style={{
-                          width: "100%",
-                          border: 0,
-                          background: "transparent",
-                          padding: "14px 16px",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: "12px",
-                          textAlign: "left",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span>
-                          <strong
-                            style={{
-                              display: "block",
-                              color: "#172b46",
-                              fontSize: "14px",
-                            }}
-                          >
-                            Status turno {statusHistorico.tipoTurno} · {statusHistorico.bloqueTrabajo}
-                          </strong>
-                          <small style={{ color: "#6b7b90" }}>
-                            {statusHistorico.rangoTurno}
-                          </small>
-                        </span>
-                        <strong style={{ color: "#40556f" }}>
-                          {abierto ? "−" : "+"}
-                        </strong>
-                      </button>
+                  <div style={{ display: "grid", gap: "10px" }}>
+                    {historialTurnosRecientes.map((statusHistorico) => {
+                      const abierto =
+                        claveHistorialAbierto === statusHistorico.claveTurno;
 
-                      {abierto && (
-                        <div
+                      return (
+                        <article
+                          key={statusHistorico.claveTurno}
                           style={{
-                            padding: "0 16px 16px",
-                            borderTop: "1px solid #edf1f6",
+                            border: "1px solid #d9e3ef",
+                            borderRadius: "14px",
+                            background: "#ffffff",
+                            overflow: "hidden",
                           }}
                         >
-                          <div
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setClaveHistorialAbierto(
+                                abierto ? null : statusHistorico.claveTurno,
+                              )
+                            }
                             style={{
-                              display: "grid",
-                              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-                              gap: "8px",
-                              marginTop: "14px",
+                              width: "100%",
+                              border: 0,
+                              background: "transparent",
+                              padding: "14px 16px",
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              gap: "12px",
+                              textAlign: "left",
+                              cursor: "pointer",
                             }}
                           >
-                            <div className="status-summary-card">
-                              <small>Averías iniciadas</small>
-                              <strong>{statusHistorico.resumen.averiasIniciadas}</strong>
-                            </div>
-                            <div className="status-summary-card">
-                              <small>Averías cerradas</small>
-                              <strong>{statusHistorico.resumen.averiasCerradas}</strong>
-                            </div>
-                            <div className="status-summary-card">
-                              <small>Heredadas</small>
-                              <strong>{statusHistorico.resumen.averiasHeredadas}</strong>
-                            </div>
-                            <div className="status-summary-card">
-                              <small>Mantenciones</small>
-                              <strong>{statusHistorico.resumen.mantenimientosIniciados}</strong>
-                            </div>
-                          </div>
-
-                          {statusHistorico.averias.length > 0 && (
-                            <div style={{ marginTop: "16px" }}>
+                            <span>
                               <strong
                                 style={{
                                   display: "block",
-                                  marginBottom: "8px",
-                                  color: "#213a59",
+                                  color: "#172b46",
+                                  fontSize: "14px",
                                 }}
                               >
-                                Averías del status
+                                Status turno {statusHistorico.tipoTurno} · {statusHistorico.bloqueTrabajo}
                               </strong>
-                              <div style={{ display: "grid", gap: "8px" }}>
-                                {statusHistorico.averias.map((averia) => (
-                                  <div
-                                    key={`hist-${statusHistorico.claveTurno}-${averia.id}`}
+                              <small style={{ color: "#6b7b90" }}>
+                                {statusHistorico.rangoTurno}
+                              </small>
+                            </span>
+                            <strong style={{ color: "#40556f" }}>
+                              {abierto ? "−" : "+"}
+                            </strong>
+                          </button>
+
+                          {abierto && (
+                            <div
+                              style={{
+                                padding: "0 16px 16px",
+                                borderTop: "1px solid #edf1f6",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                  gap: "8px",
+                                  marginTop: "14px",
+                                }}
+                              >
+                                <div className="status-summary-card">
+                                  <small>Averías iniciadas</small>
+                                  <strong>{statusHistorico.resumen.averiasIniciadas}</strong>
+                                </div>
+                                <div className="status-summary-card">
+                                  <small>Averías cerradas</small>
+                                  <strong>{statusHistorico.resumen.averiasCerradas}</strong>
+                                </div>
+                                <div className="status-summary-card">
+                                  <small>Heredadas</small>
+                                  <strong>{statusHistorico.resumen.averiasHeredadas}</strong>
+                                </div>
+                                <div className="status-summary-card">
+                                  <small>Mantenciones</small>
+                                  <strong>{statusHistorico.resumen.mantenimientosIniciados}</strong>
+                                </div>
+                              </div>
+
+                              {statusHistorico.averias.length > 0 && (
+                                <div style={{ marginTop: "16px" }}>
+                                  <strong
                                     style={{
-                                      padding: "10px 12px",
-                                      borderRadius: "10px",
-                                      background: "#f7f9fc",
-                                      border: "1px solid #e5ebf2",
+                                      display: "block",
+                                      marginBottom: "8px",
+                                      color: "#213a59",
                                     }}
                                   >
-                                    <strong>
-                                      {averia.equipo.numeroMina} · {averia.sistema}
-                                    </strong>
-                                    <div
-                                      style={{
-                                        marginTop: "4px",
-                                        color: "#617187",
-                                        fontSize: "12px",
-                                        lineHeight: 1.45,
-                                      }}
-                                    >
-                                      Inicio: {formatearFechaHoraChile(averia.fechaAviso)}
-                                      {averia.fechaAtencion && (
-                                        <>
-                                          <br />
-                                          Atención: {formatearFechaHoraChile(averia.fechaAtencion)}
-                                        </>
-                                      )}
-                                      {averia.fechaCierre && (
-                                        <>
-                                          <br />
-                                          Operativo: {formatearFechaHoraChile(averia.fechaCierre)}
-                                        </>
-                                      )}
-                                      <br />
-                                      Estado: {averia.estadoAveria === "Cerrada" ? "Operativo" : averia.estadoAveria}
-                                    </div>
-                                    {averia.trabajoRealizado && (
-                                      <p
+                                    Averías del status
+                                  </strong>
+                                  <div style={{ display: "grid", gap: "8px" }}>
+                                    {statusHistorico.averias.map((averia) => (
+                                      <div
+                                        key={`hist-${statusHistorico.claveTurno}-${averia.id}`}
                                         style={{
-                                          margin: "7px 0 0",
-                                          fontSize: "12px",
-                                          color: "#40536c",
+                                          padding: "10px 12px",
+                                          borderRadius: "10px",
+                                          background: "#f7f9fc",
+                                          border: "1px solid #e5ebf2",
                                         }}
                                       >
-                                        Trabajo: {averia.trabajoRealizado}
-                                      </p>
-                                    )}
+                                        <strong>
+                                          {averia.equipo.numeroMina} · {averia.sistema}
+                                        </strong>
+                                        <div
+                                          style={{
+                                            marginTop: "4px",
+                                            color: "#617187",
+                                            fontSize: "12px",
+                                            lineHeight: 1.45,
+                                          }}
+                                        >
+                                          Inicio: {formatearFechaHoraChile(averia.fechaAviso)}
+                                          {averia.fechaAtencion && (
+                                            <>
+                                              <br />
+                                              Atención: {formatearFechaHoraChile(averia.fechaAtencion)}
+                                            </>
+                                          )}
+                                          {averia.fechaCierre && (
+                                            <>
+                                              <br />
+                                              Operativo: {formatearFechaHoraChile(averia.fechaCierre)}
+                                            </>
+                                          )}
+                                          <br />
+                                          Estado: {averia.estadoAveria === "Cerrada" ? "Operativo" : averia.estadoAveria}
+                                        </div>
+                                        {averia.trabajoRealizado && (
+                                          <p
+                                            style={{
+                                              margin: "7px 0 0",
+                                              fontSize: "12px",
+                                              color: "#40536c",
+                                            }}
+                                          >
+                                            Trabajo: {averia.trabajoRealizado}
+                                          </p>
+                                        )}
+                                      </div>
+                                    ))}
                                   </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                                </div>
+                              )}
 
-                          {statusHistorico.mantenimientos.length > 0 && (
-                            <div style={{ marginTop: "16px" }}>
-                              <strong
-                                style={{
-                                  display: "block",
-                                  marginBottom: "8px",
-                                  color: "#4338ca",
-                                }}
-                              >
-                                Mantenimientos del status
-                              </strong>
-                              <div style={{ display: "grid", gap: "8px" }}>
-                                {statusHistorico.mantenimientos.map((mantenimiento) => (
-                                  <div
-                                    key={`hist-mant-${statusHistorico.claveTurno}-${mantenimiento.id}`}
+                              {statusHistorico.mantenimientos.length > 0 && (
+                                <div style={{ marginTop: "16px" }}>
+                                  <strong
                                     style={{
-                                      padding: "10px 12px",
-                                      borderRadius: "10px",
-                                      background: "#f7f7ff",
-                                      border: "1px solid #e1e2ff",
+                                      display: "block",
+                                      marginBottom: "8px",
+                                      color: "#4338ca",
                                     }}
                                   >
-                                    <strong>
-                                      {mantenimiento.equipo.numeroMina} · Mantenimiento programado
-                                    </strong>
-                                    <p
-                                      style={{
-                                        margin: "5px 0 0",
-                                        color: "#5d617a",
-                                        fontSize: "12px",
-                                      }}
-                                    >
-                                      {mantenimiento.motivo}
-                                    </p>
+                                    Mantenimientos del status
+                                  </strong>
+                                  <div style={{ display: "grid", gap: "8px" }}>
+                                    {statusHistorico.mantenimientos.map((mantenimiento) => (
+                                      <div
+                                        key={`hist-mant-${statusHistorico.claveTurno}-${mantenimiento.id}`}
+                                        style={{
+                                          padding: "10px 12px",
+                                          borderRadius: "10px",
+                                          background: "#f7f7ff",
+                                          border: "1px solid #e1e2ff",
+                                        }}
+                                      >
+                                        <strong>
+                                          {mantenimiento.equipo.numeroMina} · Mantenimiento programado
+                                        </strong>
+                                        <p
+                                          style={{
+                                            margin: "5px 0 0",
+                                            color: "#5d617a",
+                                            fontSize: "12px",
+                                          }}
+                                        >
+                                          {mantenimiento.motivo}
+                                        </p>
+                                      </div>
+                                    ))}
                                   </div>
-                                ))}
-                              </div>
+                                </div>
+                              )}
                             </div>
                           )}
-                        </div>
-                      )}
-                    </article>
-                  );
-                })}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
 
-                {historialTurnosCerrados.length > 10 && (
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() =>
-                      setMostrarHistorialCompleto((valor) => !valor)
-                    }
+                {mesesHistorial.length > 0 && (
+                  <div
+                    style={{
+                      paddingTop: "16px",
+                      borderTop: "1px solid #e6edf5",
+                    }}
                   >
-                    {mostrarHistorialCompleto
-                      ? "Mostrar solo los 10 más recientes"
-                      : `Ver ${historialTurnosCerrados.length - 10} turnos anteriores`}
-                  </button>
+                    <strong
+                      style={{
+                        display: "block",
+                        marginBottom: "4px",
+                        color: "#213a59",
+                        fontSize: "14px",
+                      }}
+                    >
+                      Archivo mensual
+                    </strong>
+                    <p
+                      style={{
+                        margin: "0 0 10px",
+                        color: "#718096",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Los turnos anteriores quedan agrupados por mes para evitar una lista extensa.
+                    </p>
+
+                    <div style={{ display: "grid", gap: "9px" }}>
+                      {mesesHistorial.map(({ claveMes, etiquetaMes, turnos }) => {
+                        const mesAbierto = mesHistorialAbierto === claveMes;
+
+                        return (
+                          <div
+                            key={claveMes}
+                            style={{
+                              border: "1px solid #d9e3ef",
+                              borderRadius: "14px",
+                              background: "#f8fafc",
+                              overflow: "hidden",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMesHistorialAbierto(mesAbierto ? null : claveMes)
+                              }
+                              style={{
+                                width: "100%",
+                                border: 0,
+                                background: "transparent",
+                                padding: "14px 16px",
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: "12px",
+                                textAlign: "left",
+                                cursor: "pointer",
+                              }}
+                            >
+                              <span>
+                                <strong
+                                  style={{
+                                    display: "block",
+                                    color: "#172b46",
+                                    fontSize: "14px",
+                                  }}
+                                >
+                                  {etiquetaMes}
+                                </strong>
+                                <small style={{ color: "#6b7b90" }}>
+                                  {turnos.length} {turnos.length === 1 ? "turno archivado" : "turnos archivados"}
+                                </small>
+                              </span>
+                              <strong style={{ color: "#40556f" }}>
+                                {mesAbierto ? "−" : "+"}
+                              </strong>
+                            </button>
+
+                            {mesAbierto && (
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gap: "9px",
+                                  padding: "0 10px 10px",
+                                  borderTop: "1px solid #e8eef5",
+                                }}
+                              >
+                                {turnos.map((statusHistorico) => {
+                                  const abierto =
+                                    claveHistorialAbierto === statusHistorico.claveTurno;
+
+                                  return (
+                                    <article
+                                      key={statusHistorico.claveTurno}
+                                      style={{
+                                        border: "1px solid #d9e3ef",
+                                        borderRadius: "12px",
+                                        background: "#ffffff",
+                                        overflow: "hidden",
+                                        marginTop: "9px",
+                                      }}
+                                    >
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          setClaveHistorialAbierto(
+                                            abierto ? null : statusHistorico.claveTurno,
+                                          )
+                                        }
+                                        style={{
+                                          width: "100%",
+                                          border: 0,
+                                          background: "transparent",
+                                          padding: "12px 14px",
+                                          display: "flex",
+                                          justifyContent: "space-between",
+                                          alignItems: "center",
+                                          gap: "12px",
+                                          textAlign: "left",
+                                          cursor: "pointer",
+                                        }}
+                                      >
+                                        <span>
+                                          <strong
+                                            style={{
+                                              display: "block",
+                                              color: "#172b46",
+                                              fontSize: "13px",
+                                            }}
+                                          >
+                                            Status turno {statusHistorico.tipoTurno} · {statusHistorico.bloqueTrabajo}
+                                          </strong>
+                                          <small style={{ color: "#6b7b90" }}>
+                                            {statusHistorico.rangoTurno}
+                                          </small>
+                                        </span>
+                                        <strong style={{ color: "#40556f" }}>
+                                          {abierto ? "−" : "+"}
+                                        </strong>
+                                      </button>
+
+                                      {abierto && (
+                                        <div
+                                          style={{
+                                            padding: "0 14px 14px",
+                                            borderTop: "1px solid #edf1f6",
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              display: "grid",
+                                              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                                              gap: "8px",
+                                              marginTop: "12px",
+                                            }}
+                                          >
+                                            <div className="status-summary-card">
+                                              <small>Averías iniciadas</small>
+                                              <strong>{statusHistorico.resumen.averiasIniciadas}</strong>
+                                            </div>
+                                            <div className="status-summary-card">
+                                              <small>Averías cerradas</small>
+                                              <strong>{statusHistorico.resumen.averiasCerradas}</strong>
+                                            </div>
+                                            <div className="status-summary-card">
+                                              <small>Heredadas</small>
+                                              <strong>{statusHistorico.resumen.averiasHeredadas}</strong>
+                                            </div>
+                                            <div className="status-summary-card">
+                                              <small>Mantenciones</small>
+                                              <strong>{statusHistorico.resumen.mantenimientosIniciados}</strong>
+                                            </div>
+                                          </div>
+
+                                          {statusHistorico.averias.length > 0 && (
+                                            <div style={{ marginTop: "14px" }}>
+                                              <strong
+                                                style={{
+                                                  display: "block",
+                                                  marginBottom: "8px",
+                                                  color: "#213a59",
+                                                }}
+                                              >
+                                                Averías del status
+                                              </strong>
+                                              <div style={{ display: "grid", gap: "8px" }}>
+                                                {statusHistorico.averias.map((averia) => (
+                                                  <div
+                                                    key={`hist-${statusHistorico.claveTurno}-${averia.id}`}
+                                                    style={{
+                                                      padding: "10px 12px",
+                                                      borderRadius: "10px",
+                                                      background: "#f7f9fc",
+                                                      border: "1px solid #e5ebf2",
+                                                    }}
+                                                  >
+                                                    <strong>
+                                                      {averia.equipo.numeroMina} · {averia.sistema}
+                                                    </strong>
+                                                    <div
+                                                      style={{
+                                                        marginTop: "4px",
+                                                        color: "#617187",
+                                                        fontSize: "12px",
+                                                        lineHeight: 1.45,
+                                                      }}
+                                                    >
+                                                      Inicio: {formatearFechaHoraChile(averia.fechaAviso)}
+                                                      {averia.fechaAtencion && (
+                                                        <>
+                                                          <br />
+                                                          Atención: {formatearFechaHoraChile(averia.fechaAtencion)}
+                                                        </>
+                                                      )}
+                                                      {averia.fechaCierre && (
+                                                        <>
+                                                          <br />
+                                                          Operativo: {formatearFechaHoraChile(averia.fechaCierre)}
+                                                        </>
+                                                      )}
+                                                      <br />
+                                                      Estado: {averia.estadoAveria === "Cerrada" ? "Operativo" : averia.estadoAveria}
+                                                    </div>
+                                                    {averia.trabajoRealizado && (
+                                                      <p
+                                                        style={{
+                                                          margin: "7px 0 0",
+                                                          fontSize: "12px",
+                                                          color: "#40536c",
+                                                        }}
+                                                      >
+                                                        Trabajo: {averia.trabajoRealizado}
+                                                      </p>
+                                                    )}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+
+                                          {statusHistorico.mantenimientos.length > 0 && (
+                                            <div style={{ marginTop: "14px" }}>
+                                              <strong
+                                                style={{
+                                                  display: "block",
+                                                  marginBottom: "8px",
+                                                  color: "#4338ca",
+                                                }}
+                                              >
+                                                Mantenimientos del status
+                                              </strong>
+                                              <div style={{ display: "grid", gap: "8px" }}>
+                                                {statusHistorico.mantenimientos.map((mantenimiento) => (
+                                                  <div
+                                                    key={`hist-mant-${statusHistorico.claveTurno}-${mantenimiento.id}`}
+                                                    style={{
+                                                      padding: "10px 12px",
+                                                      borderRadius: "10px",
+                                                      background: "#f7f7ff",
+                                                      border: "1px solid #e1e2ff",
+                                                    }}
+                                                  >
+                                                    <strong>
+                                                      {mantenimiento.equipo.numeroMina} · Mantenimiento programado
+                                                    </strong>
+                                                    <p
+                                                      style={{
+                                                        margin: "5px 0 0",
+                                                        color: "#5d617a",
+                                                        fontSize: "12px",
+                                                      }}
+                                                    >
+                                                      {mantenimiento.motivo}
+                                                    </p>
+                                                  </div>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                    </article>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
