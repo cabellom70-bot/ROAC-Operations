@@ -1079,8 +1079,14 @@ function App() {
   }
 
   async function enviarPushOperacional(
-    accion: "NUEVA_AVERIA" | "EQUIPO_OPERATIVO",
+    accion: "NUEVA_AVERIA" | "EQUIPO_OPERATIVO" | "PATRON_TECNICO",
     averiaId: number,
+    patron?: {
+      tipo: TipoAlertaPatron;
+      familia: string;
+      cantidadReincidencia: number;
+      cantidadFamilia: number;
+    },
   ) {
     try {
       const excludeEndpoint = await obtenerEndpointPushActual();
@@ -1092,6 +1098,14 @@ function App() {
             accion,
             averiaId,
             excludeEndpoint,
+            ...(accion === "PATRON_TECNICO" && patron
+              ? {
+                  tipoPatron: patron.tipo,
+                  familiaPatron: patron.familia,
+                  cantidadReincidencia: patron.cantidadReincidencia,
+                  cantidadFamilia: patron.cantidadFamilia,
+                }
+              : {}),
           },
         },
       );
@@ -1215,6 +1229,7 @@ function App() {
     equipoId: number,
     numeroMina: string,
     averiaId: number,
+    enviarPushPatron = false,
   ) {
     const { data, error } = await supabase
       .from("averias")
@@ -1305,6 +1320,18 @@ function App() {
       relacionados,
     });
     reproducirAlertaPatronTecnico();
+
+    // Solo el dispositivo que PUBLICÓ la avería solicita el Push de patrón.
+    // Los demás dispositivos ya muestran la alerta por Realtime y no deben
+    // volver a disparar el mismo Push, evitando duplicados masivos.
+    if (enviarPushPatron) {
+      void enviarPushOperacional("PATRON_TECNICO", averiaId, {
+        tipo,
+        familia: familiaActual,
+        cantidadReincidencia: similares.length,
+        cantidadFamilia: mismaFamilia.length,
+      });
+    }
 
     // La advertencia permanece más tiempo que una avería normal para permitir
     // leer los antecedentes que provocaron el patrón.
@@ -3355,6 +3382,7 @@ const averiasCerradasEnTurno = averias.filter(
       equipoDb.id,
       equipoSeleccionado.numeroMina,
       averiaDb.id,
+      true,
     );
 
     setEquipoSeleccionado(null);
