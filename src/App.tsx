@@ -4609,6 +4609,261 @@ const averiasCerradasEnTurno = averias.filter(
       className={`app ${!puedeModificar ? "read-only-mode" : ""}`}
     >
       <style>{`
+        /* ───── MANTENIMIENTO PROGRAMADO: presentación visual ───── */
+        .equipment-selector .equipment-grid {
+          align-items: stretch;
+        }
+
+        .equipment-selector .fault-selection-wrapper {
+          position: relative;
+          min-width: 0;
+          display: flex;
+        }
+
+        .equipment-selector .fault-selection-wrapper > .equipment-card {
+          flex: 1;
+          min-height: 118px;
+          border-radius: 15px;
+          box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.08);
+          transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+        }
+
+        .equipment-selector .fault-selection-wrapper > .equipment-card:hover {
+          transform: translateY(-1px);
+          box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+        }
+
+        /* Reserva una franja superior para el estado sin tapar el número del equipo. */
+        .equipment-selector .fault-selection-wrapper.maintenance-card-unavailable > .equipment-card {
+          padding-top: 34px;
+        }
+
+        .equipment-selector .maintenance-unavailable-label {
+          position: absolute;
+          top: 7px;
+          right: 7px;
+          z-index: 5;
+          max-width: calc(100% - 14px);
+          padding: 4px 7px;
+          border-radius: 8px;
+          font-size: 0.54rem;
+          line-height: 1.08;
+          font-weight: 900;
+          letter-spacing: 0.025em;
+          text-align: center;
+          box-shadow: 0 2px 5px rgba(15, 23, 42, 0.08);
+          pointer-events: none;
+        }
+
+        .equipment-selector .maintenance-unavailable-fault {
+          background: #fff0c7;
+          color: #9a5600;
+          border: 1px solid #ffd36a;
+        }
+
+        .equipment-selector .maintenance-unavailable-active {
+          background: #e9e7ff;
+          color: #4f46e5;
+          border: 1px solid #c4b5fd;
+        }
+
+        .equipment-selector .maintenance-unavailable-state {
+          background: #e2e8f0;
+          color: #475569;
+          border: 1px solid #cbd5e1;
+        }
+
+        .equipment-selector .equipment-programmed-maintenance {
+          border-color: #8b7cf6;
+          border-left-color: #6366f1;
+          background: linear-gradient(180deg, #f4f3ff 0%, #eef2ff 100%);
+        }
+
+        .equipment-selector .equipment-card-selected {
+          border-color: #6d5dfc;
+          border-left-color: #6d5dfc;
+          background: linear-gradient(180deg, #f4f3ff 0%, #eef2ff 100%);
+          box-shadow: 0 0 0 2px rgba(109, 93, 252, 0.12);
+        }
+
+        .maintenance-selected {
+          margin-top: 18px;
+          border: 1px solid #ddd6fe;
+          background: linear-gradient(180deg, #fafaff 0%, #f5f3ff 100%);
+        }
+
+        .maintenance-form {
+          overflow: hidden;
+        }
+
+        .maintenance-form .form-header {
+          margin-bottom: 20px;
+          padding-bottom: 14px;
+          border-bottom: 1px solid #e2e8f0;
+        }
+
+        .maintenance-form .form-header h2 {
+          font-size: clamp(1.35rem, 4vw, 1.75rem);
+          color: #172033;
+        }
+
+        .maintenance-form .equipment-model {
+          margin-top: 4px;
+          color: #64748b;
+          font-size: 1rem;
+          font-weight: 800;
+        }
+
+        .maintenance-form .form-group {
+          margin-top: 16px;
+          padding: 14px;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
+          background: #f8fafc;
+        }
+
+        .maintenance-form .form-group label {
+          display: block;
+          margin-bottom: 9px;
+          color: #172033;
+          font-weight: 800;
+        }
+
+        .maintenance-form textarea,
+        .maintenance-form .form-input {
+          width: 100%;
+          border: 1px solid #cbd5e1;
+          border-radius: 12px;
+          background: #ffffff;
+          color: #172033;
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+          transition: border-color 0.16s ease, box-shadow 0.16s ease;
+        }
+
+        .maintenance-form textarea:focus,
+        .maintenance-form .form-input:focus {
+          outline: none;
+          border-color: #7c6df2;
+          box-shadow: 0 0 0 3px rgba(124, 109, 242, 0.12);
+        }
+
+        .maintenance-form .automatic-data {
+          margin-top: 18px;
+          padding: 4px 14px;
+          border: 1px solid #e2e8f0;
+          border-radius: 14px;
+          background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        }
+
+        .maintenance-form .automatic-data p {
+          align-items: center;
+          min-height: 52px;
+        }
+
+        .maintenance-form .automatic-data span {
+          color: #334155;
+          font-weight: 700;
+        }
+
+        .maintenance-form .automatic-data strong {
+          color: #172033;
+          font-weight: 900;
+          text-align: right;
+        }
+
+        .maintenance-form .automatic-data p:first-child strong {
+          padding: 6px 9px;
+          border-radius: 999px;
+          background: #e9e7ff;
+          color: #4f46e5;
+          font-size: 0.78rem;
+        }
+
+        .maintenance-form .start-maintenance-button {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          width: 100%;
+          margin-top: 20px;
+          padding: 15px 18px;
+          border: 0;
+          border-radius: 13px;
+          background: linear-gradient(135deg, #6d4df4 0%, #5538e8 100%);
+          color: #ffffff;
+          font: inherit;
+          font-size: 1rem;
+          font-weight: 900;
+          line-height: 1.2;
+          box-shadow: 0 9px 20px rgba(85, 56, 232, 0.22);
+          cursor: pointer;
+          transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+        }
+
+        .maintenance-form .start-maintenance-button::before {
+          content: "▶";
+          font-size: 0.82rem;
+        }
+
+        .maintenance-form .start-maintenance-button:hover {
+          transform: translateY(-1px);
+          filter: brightness(0.98);
+          box-shadow: 0 11px 22px rgba(85, 56, 232, 0.28);
+        }
+
+        .maintenance-form .start-maintenance-button:active {
+          transform: translateY(0);
+        }
+
+        .maintenance-form .secondary-button {
+          width: 100%;
+          margin-top: 12px;
+          padding: 13px 16px;
+          border: 1px solid #cbd5e1;
+          border-radius: 13px;
+          background: #ffffff;
+          color: #263247;
+          font: inherit;
+          font-weight: 800;
+          cursor: pointer;
+        }
+
+        @media (max-width: 560px) {
+          .equipment-selector .equipment-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+          }
+
+          .equipment-selector .fault-selection-wrapper > .equipment-card {
+            min-height: 112px;
+            padding: 12px 5px;
+          }
+
+          .equipment-selector .fault-selection-wrapper.maintenance-card-unavailable > .equipment-card {
+            padding-top: 31px;
+          }
+
+          .equipment-selector .maintenance-unavailable-label {
+            top: 5px;
+            left: 6px;
+            right: 6px;
+            max-width: none;
+            padding: 3px 4px;
+            font-size: 0.45rem;
+            white-space: normal;
+          }
+
+          .maintenance-form .form-group {
+            padding: 12px;
+          }
+
+          .maintenance-form .automatic-data {
+            padding: 3px 12px;
+          }
+        }
+      `}</style>
+
+      <style>{`
         .app-header {
           position: relative;
           overflow: hidden;
@@ -7757,9 +8012,20 @@ const averiasCerradasEnTurno = averias.filter(
               const disponible = equipo.estado === "Operativo" && !tieneAveria && !tieneMantenimiento;
 
               return (
-                <div className="fault-selection-wrapper" key={equipo.numeroMina}>
+                <div
+                  className={`fault-selection-wrapper ${!disponible ? "maintenance-card-unavailable" : ""}`}
+                  key={equipo.numeroMina}
+                >
                   {!disponible && (
-                    <span className="maintenance-unavailable-label">
+                    <span
+                      className={`maintenance-unavailable-label ${
+                        tieneAveria
+                          ? "maintenance-unavailable-fault"
+                          : tieneMantenimiento
+                            ? "maintenance-unavailable-active"
+                            : "maintenance-unavailable-state"
+                      }`}
+                    >
                       {tieneAveria ? "AVERÍA ABIERTA" : tieneMantenimiento ? "EN MANTENIMIENTO" : equipo.estado.toUpperCase()}
                     </span>
                   )}
