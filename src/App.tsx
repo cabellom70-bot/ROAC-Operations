@@ -475,6 +475,121 @@ function obtenerHoraActual() {
   });
 }
 
+
+type TipoAlertaPatron = "REINCIDENCIA" | "CONCENTRACION" | "DOBLE";
+
+type RegistroPatronAveria = {
+  id: number;
+  sistema: string;
+  detalleInicial: string;
+  fechaAviso: string;
+};
+
+type AlertaPatronTecnico = {
+  tipo: TipoAlertaPatron;
+  numeroMina: string;
+  averiaId: number;
+  titulo: string;
+  mensaje: string;
+  familia: string;
+  cantidadReincidencia: number;
+  cantidadFamilia: number;
+  relacionados: RegistroPatronAveria[];
+};
+
+function normalizarTextoPatron(texto: string) {
+  return (texto ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const PALABRAS_VACIAS_PATRON = new Set([
+  "de", "del", "la", "el", "los", "las", "un", "una", "y", "en", "con",
+  "por", "para", "se", "equipo", "presenta", "presento", "activo", "activa",
+  "falla", "fallas", "sistema", "codigo", "alarma",
+]);
+
+function tokensTecnicosPatron(texto: string) {
+  return new Set(
+    normalizarTextoPatron(texto)
+      .split(" ")
+      .filter((token) => token.length >= 3 && !PALABRAS_VACIAS_PATRON.has(token)),
+  );
+}
+
+function obtenerPatronEspecifico(sistema: string, detalle: string) {
+  const texto = normalizarTextoPatron(`${sistema} ${detalle}`);
+  const incluye = (...terminos: string[]) =>
+    terminos.some((termino) => texto.includes(termino));
+
+  // Patrones deliberadamente específicos. La categoría general por sí sola
+  // nunca basta para declarar una reincidencia.
+  if (
+    incluye("motor", "ecm", "ecu", "engine") &&
+    incluye("codigo", "alarma", "ecm", "ecu", "check engine", "falla motor")
+  ) return "control_motor";
+  if (incluye("presion") && incluye("aceite") && incluye("motor", "engine")) return "presion_aceite_motor";
+  if (incluye("temperatura", "sobretemperatura") && incluye("refrigerante", "coolant", "motor")) return "temperatura_motor";
+  if (incluye("inyector", "inyectores", "inyeccion")) return "inyeccion_motor";
+  if (incluye("nivel") && incluye("aceite") && incluye("motor", "engine")) return "nivel_aceite_motor";
+  if (incluye("turbo", "turbocompresor")) return "turbo_motor";
+  if (incluye("arranque") && incluye("motor", "engine")) return "arranque_motor";
+
+  return "";
+}
+
+function sonAveriasEspecificamenteSimilares(
+  a: Pick<RegistroPatronAveria, "sistema" | "detalleInicial">,
+  b: Pick<RegistroPatronAveria, "sistema" | "detalleInicial">,
+) {
+  const patronA = obtenerPatronEspecifico(a.sistema, a.detalleInicial);
+  const patronB = obtenerPatronEspecifico(b.sistema, b.detalleInicial);
+
+  if (patronA && patronA === patronB) {
+    return true;
+  }
+
+  const tokensA = tokensTecnicosPatron(`${a.sistema} ${a.detalleInicial}`);
+  const tokensB = tokensTecnicosPatron(`${b.sistema} ${b.detalleInicial}`);
+  if (tokensA.size < 2 || tokensB.size < 2) return false;
+
+  const comunes = [...tokensA].filter((token) => tokensB.has(token)).length;
+  const union = new Set([...tokensA, ...tokensB]).size;
+  const similitud = union > 0 ? comunes / union : 0;
+
+  // Dos términos técnicos compartidos y una similitud razonable evitan que
+  // dos fallas coincidan solo porque ambas pertenecen a "Motor" o "Eléctrico".
+  return comunes >= 2 && similitud >= 0.4;
+}
+
+function obtenerFamiliaTecnica(sistema: string, detalle: string) {
+  const texto = normalizarTextoPatron(`${sistema} ${detalle}`);
+  const incluye = (...terminos: string[]) =>
+    terminos.some((termino) => texto.includes(termino));
+
+  if (
+    incluye(
+      "motor", "engine", "ecm", "ecu", "inyector", "inyeccion", "refrigerante",
+      "coolant", "turbo", "turbocompresor",
+    ) || (incluye("aceite") && incluye("motor"))
+  ) return "Motor diésel";
+  if (incluye("freno", "brake", "retardo", "retarder")) return "Frenos y retardo";
+  if (incluye("direccion", "steering")) return "Dirección";
+  if (incluye("suspension", "suspencion")) return "Suspensión";
+  if (incluye("hidraulic", "bomba hid", "valvula hid", "cilindro")) return "Sistema hidráulico";
+  if (incluye("electrico", "electrica", "alternador", "bateria", "24v", "voltaje")) return "Sistema eléctrico";
+  if (incluye("aire acondicionado", "climatizacion", "a c")) return "Aire acondicionado";
+
+  // Si no podemos asociarla con seguridad a una familia técnica conocida,
+  // no generamos una alerta de concentración. Es preferible omitir una
+  // advertencia dudosa antes que mezclar fallas mecánicas no relacionadas.
+  return "";
+}
+
 function App() {
   const [vista, setVista] = useState<Vista>("inicio");
   const [equipos, setEquipos] = useState<Equipo[]>([]);
@@ -518,6 +633,9 @@ function App() {
     trabajoRealizado: string;
   } | null>(null);
 
+  const [alertaPatronTecnico, setAlertaPatronTecnico] =
+    useState<AlertaPatronTecnico | null>(null);
+
   // Diagnóstico temporal de Supabase Realtime.
   // Nos permitirá comprobar desde PC y celular si el canal realmente queda conectado.
   const [estadoRealtime, setEstadoRealtime] = useState("CONECTANDO");
@@ -529,6 +647,8 @@ function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const alertaTimeoutRef = useRef<number | null>(null);
   const alertaOperativaTimeoutRef = useRef<number | null>(null);
+  const alertaPatronTimeoutRef = useRef<number | null>(null);
+  const patronesAlertadosRef = useRef<Set<string>>(new Set());
   const operativosAlertadosRef = useRef<Set<number>>(new Set());
   const averiaLocalPendienteRef = useRef<{
     equipoId: number;
@@ -1046,6 +1166,154 @@ function App() {
     }
   }
 
+  function reproducirAlertaPatronTecnico() {
+    try {
+      const contexto = obtenerAudioContexto();
+
+      if (contexto.state === "suspended") {
+        void contexto.resume();
+      }
+
+      const inicio = contexto.currentTime + 0.03;
+      const tonos = [
+        { desfase: 0, frecuencia: 540, duracion: 0.18 },
+        { desfase: 0.24, frecuencia: 540, duracion: 0.18 },
+        { desfase: 0.52, frecuencia: 760, duracion: 0.26 },
+      ];
+
+      tonos.forEach(({ desfase, frecuencia, duracion }) => {
+        const oscilador = contexto.createOscillator();
+        const ganancia = contexto.createGain();
+        const comienzo = inicio + desfase;
+        const termino = comienzo + duracion;
+
+        oscilador.type = "triangle";
+        oscilador.frequency.setValueAtTime(frecuencia, comienzo);
+        ganancia.gain.setValueAtTime(0.0001, comienzo);
+        ganancia.gain.exponentialRampToValueAtTime(0.2, comienzo + 0.025);
+        ganancia.gain.exponentialRampToValueAtTime(0.0001, termino);
+        oscilador.connect(ganancia);
+        ganancia.connect(contexto.destination);
+        oscilador.start(comienzo);
+        oscilador.stop(termino + 0.02);
+      });
+    } catch (error) {
+      console.warn("No se pudo reproducir la advertencia de patrón técnico:", error);
+    }
+  }
+
+  function cerrarAlertaPatronTecnico() {
+    setAlertaPatronTecnico(null);
+
+    if (alertaPatronTimeoutRef.current !== null) {
+      window.clearTimeout(alertaPatronTimeoutRef.current);
+      alertaPatronTimeoutRef.current = null;
+    }
+  }
+
+  async function evaluarPatronesTecnicosAveria(
+    equipoId: number,
+    numeroMina: string,
+    averiaId: number,
+  ) {
+    const { data, error } = await supabase
+      .from("averias")
+      .select("id, sistema, detalle_inicial, fecha_aviso")
+      .eq("equipo_id", equipoId)
+      .order("fecha_aviso", { ascending: true });
+
+    if (error || !data) {
+      console.error("No se pudo evaluar reincidencia de averías:", error);
+      return;
+    }
+
+    const registros: RegistroPatronAveria[] = data.map((registro) => ({
+      id: registro.id,
+      sistema: registro.sistema ?? "",
+      detalleInicial: registro.detalle_inicial ?? "",
+      fechaAviso: registro.fecha_aviso ?? "",
+    }));
+
+    const actual = registros.find((registro) => registro.id === averiaId);
+    if (!actual) return;
+
+    const similares = registros.filter((registro) =>
+      sonAveriasEspecificamenteSimilares(actual, registro),
+    );
+
+    const familiaActual = obtenerFamiliaTecnica(actual.sistema, actual.detalleInicial);
+    const mismaFamilia = familiaActual
+      ? registros.filter(
+          (registro) =>
+            obtenerFamiliaTecnica(registro.sistema, registro.detalleInicial) === familiaActual,
+        )
+      : [];
+
+    const disparaReincidencia =
+      similares.length >= 3 && similares.length % 3 === 0;
+    const disparaFamilia =
+      mismaFamilia.length >= 5 && mismaFamilia.length % 5 === 0;
+
+    if (!disparaReincidencia && !disparaFamilia) return;
+
+    const claveAlerta = `${averiaId}:${disparaReincidencia ? similares.length : 0}:${disparaFamilia ? mismaFamilia.length : 0}`;
+    if (patronesAlertadosRef.current.has(claveAlerta)) return;
+    patronesAlertadosRef.current.add(claveAlerta);
+
+    const tipo: TipoAlertaPatron =
+      disparaReincidencia && disparaFamilia
+        ? "DOBLE"
+        : disparaReincidencia
+          ? "REINCIDENCIA"
+          : "CONCENTRACION";
+
+    let titulo = "Advertencia de patrón técnico";
+    let mensaje = `El equipo registra ${mismaFamilia.length} fallas relacionadas con ${familiaActual}.`;
+    let relacionados = mismaFamilia.slice(-5);
+
+    if (tipo === "REINCIDENCIA") {
+      titulo = "Posible reincidencia detectada";
+      mensaje = `El equipo registra ${similares.length} detenciones con motivo o descripción iguales o técnicamente similares.`;
+      relacionados = similares.slice(-3);
+    } else if (tipo === "DOBLE") {
+      titulo = "Reincidencia y patrón técnico detectados";
+      mensaje =
+        `Se detectaron ${similares.length} detenciones similares y, además, ` +
+        `${mismaFamilia.length} fallas relacionadas con ${familiaActual}.`;
+      const ids = new Set<number>();
+      relacionados = [...similares.slice(-3), ...mismaFamilia.slice(-5)].filter((registro) => {
+        if (ids.has(registro.id)) return false;
+        ids.add(registro.id);
+        return true;
+      });
+    }
+
+    cerrarAlertaNuevaAveria();
+    if (alertaPatronTimeoutRef.current !== null) {
+      window.clearTimeout(alertaPatronTimeoutRef.current);
+    }
+
+    setAlertaPatronTecnico({
+      tipo,
+      numeroMina,
+      averiaId,
+      titulo,
+      mensaje,
+      familia: familiaActual,
+      cantidadReincidencia: similares.length,
+      cantidadFamilia: mismaFamilia.length,
+      relacionados,
+    });
+    reproducirAlertaPatronTecnico();
+
+    // La advertencia permanece más tiempo que una avería normal para permitir
+    // leer los antecedentes que provocaron el patrón.
+    alertaPatronTimeoutRef.current = window.setTimeout(() => {
+      setAlertaPatronTecnico(null);
+      alertaPatronTimeoutRef.current = null;
+    }, 25_000);
+  }
+
   function reproducirAlertaEquipoOperativo() {
     try {
       const contexto = obtenerAudioContexto();
@@ -1195,6 +1463,14 @@ function App() {
       setAlertaNuevaAveria(null);
       alertaTimeoutRef.current = null;
     }, 12_000);
+
+    // La evaluación usa el historial completo del equipo. Si corresponde una
+    // advertencia técnica, reemplaza la alerta normal por la de mayor prioridad.
+    void evaluarPatronesTecnicosAveria(
+      registro.equipo_id,
+      equipoDb.numero_mina,
+      registro.id,
+    );
   }
 
   async function cargarEquipos() {
@@ -3072,6 +3348,14 @@ const averiasCerradasEnTurno = averias.filter(
       cargarEquipos(),
       cargarBackup(),
     ]);
+
+    // Este dispositivo ignora su propio INSERT en Realtime para no duplicar la
+    // alerta de nueva avería, por eso evaluamos aquí el patrón recién creado.
+    void evaluarPatronesTecnicosAveria(
+      equipoDb.id,
+      equipoSeleccionado.numeroMina,
+      averiaDb.id,
+    );
 
     setEquipoSeleccionado(null);
     setVista("averias");
@@ -5314,6 +5598,36 @@ const averiasCerradasEnTurno = averias.filter(
           background: #148a43;
         }
 
+        .new-fault-alert.pattern-alert {
+          border-color: rgba(217, 119, 6, 0.45);
+          border-left-color: #d97706;
+          max-width: 520px;
+        }
+
+        .pattern-alert .new-fault-alert-kicker {
+          color: #b45309;
+        }
+
+        .pattern-alert .new-fault-alert-action {
+          background: #b45309;
+        }
+
+        .pattern-alert-list {
+          margin: 10px 0 0;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: #fff7ed;
+          border: 1px solid #fed7aa;
+          font-size: 12px;
+          line-height: 1.4;
+        }
+
+        .pattern-alert-list div + div {
+          margin-top: 6px;
+          padding-top: 6px;
+          border-top: 1px solid #fed7aa;
+        }
+
         @keyframes newFaultAlertIn {
           from {
             opacity: 0;
@@ -5325,6 +5639,66 @@ const averiasCerradasEnTurno = averias.filter(
           }
         }
       `}</style>
+
+      {alertaPatronTecnico && (
+        <aside
+          className="new-fault-alert pattern-alert"
+          role="alert"
+          aria-live="assertive"
+        >
+          <div className="new-fault-alert-top">
+            <div>
+              <p className="new-fault-alert-kicker">⚠ Advertencia técnica</p>
+              <h3>{alertaPatronTecnico.titulo}</h3>
+              <p>
+                <strong>Equipo {alertaPatronTecnico.numeroMina}</strong>
+                <br />
+                {alertaPatronTecnico.mensaje}
+              </p>
+
+              <div className="pattern-alert-list">
+                <strong>Eventos que originaron la advertencia:</strong>
+                {alertaPatronTecnico.relacionados.map((registro) => (
+                  <div key={registro.id}>
+                    <strong>#{registro.id}</strong> · {formatearFechaHoraChile(registro.fechaAviso)}
+                    <br />
+                    {registro.sistema}
+                    {registro.detalleInicial ? ` — ${registro.detalleInicial}` : ""}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              className="new-fault-alert-close"
+              onClick={cerrarAlertaPatronTecnico}
+              aria-label="Cerrar advertencia técnica"
+            >
+              ×
+            </button>
+          </div>
+
+          <button
+            type="button"
+            className="new-fault-alert-action"
+            onClick={() => {
+              const equipo = equipos.find(
+                (item) => item.numeroMina === alertaPatronTecnico.numeroMina,
+              );
+              cerrarAlertaPatronTecnico();
+              if (equipo) {
+                seleccionarEquipoHistorial(equipo);
+              } else {
+                setAveriaSeleccionadaId(alertaPatronTecnico.averiaId);
+                setVista("detalle-averia");
+              }
+            }}
+          >
+            Ver historial del equipo
+          </button>
+        </aside>
+      )}
 
       {alertaNuevaAveria && (
         <aside
@@ -7521,6 +7895,17 @@ const averiasCerradasEnTurno = averias.filter(
               <button
                 type="button"
                 className="finish-maintenance-button"
+                style={{
+                  width: "100%",
+                  marginTop: "14px",
+                  border: 0,
+                  borderRadius: "14px",
+                  padding: "15px 18px",
+                  background: "#16a34a",
+                  color: "#ffffff",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
                 onClick={() => void finalizarMantenimientoProgramado()}
               >
                 Finalizar mantenimiento y dejar operativo
