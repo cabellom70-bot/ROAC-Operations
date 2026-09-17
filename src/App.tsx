@@ -31,7 +31,9 @@ type Vista =
   | "seleccionar-backup"
   | "seleccionar-equipo-mantenimiento"
   | "registrar-mantenimiento"
-  | "detalle-mantenimiento";
+  | "detalle-mantenimiento"
+  | "registrar-emergencia"
+  | "detalle-emergencia";
 
 type RolUsuario = "operaciones" | "consulta";
 
@@ -88,6 +90,18 @@ type InformeTurnoSnapshot = {
   averias: Averia[];
   mantenimientos: Mantenimiento[];
   intervenciones: IntervencionAveria[];
+};
+
+type EmergenciaMina = {
+  id: number;
+  tipoEmergencia: string;
+  sector: string;
+  descripcion: string;
+  estado: "ACTIVA" | "FINALIZADA";
+  fechaInicio: string;
+  fechaFin: string | null;
+  creadaPor: string | null;
+  finalizadaPor: string | null;
 };
 
 const ZONA_HORARIA_OPERACIONAL = "America/Santiago";
@@ -629,6 +643,7 @@ function App() {
   const [equipos, setEquipos] = useState<Equipo[]>([]);
   const [averias, setAverias] = useState<Averia[]>([]);
   const [mantenimientos, setMantenimientos] = useState<Mantenimiento[]>([]);
+  const [emergencias, setEmergencias] = useState<EmergenciaMina[]>([]);
   const [intervenciones, setIntervenciones] = useState<IntervencionAveria[]>([]);
   const [equipoSeleccionado, setEquipoSeleccionado] =
     useState<Equipo | null>(null);
@@ -641,6 +656,11 @@ function App() {
   const [motivoMantenimiento, setMotivoMantenimiento] = useState("");
   const [responsableMantenimiento, setResponsableMantenimiento] = useState("");
   const [trabajoMantenimiento, setTrabajoMantenimiento] = useState("");
+  const [emergenciaSeleccionadaId, setEmergenciaSeleccionadaId] = useState<number | null>(null);
+  const [tipoEmergencia, setTipoEmergencia] = useState("");
+  const [sectorEmergencia, setSectorEmergencia] = useState("");
+  const [descripcionEmergencia, setDescripcionEmergencia] = useState("");
+  const [alertaEmergencia, setAlertaEmergencia] = useState<EmergenciaMina | null>(null);
   const [numeroBackup, setNumeroBackup] =
     useState<string | null>(null);
 
@@ -682,6 +702,8 @@ function App() {
   const alertaTimeoutRef = useRef<number | null>(null);
   const alertaOperativaTimeoutRef = useRef<number | null>(null);
   const alertaPatronTimeoutRef = useRef<number | null>(null);
+  const sirenaEmergenciaIntervalRef = useRef<number | null>(null);
+  const emergenciaSonandoIdRef = useRef<number | null>(null);
   const patronesAlertadosRef = useRef<Set<string>>(new Set());
   const operativosAlertadosRef = useRef<Set<number>>(new Set());
   const averiaLocalPendienteRef = useRef<{
@@ -696,6 +718,10 @@ function App() {
   const averiasAlertadasRef = useRef<Set<number>>(new Set());
 
   const puedeModificar = rol === "operaciones";
+  const emergenciaActiva = emergencias.find((emergencia) => emergencia.estado === "ACTIVA") ?? null;
+  const emergenciaSeleccionada = emergencias.find(
+    (emergencia) => emergencia.id === emergenciaSeleccionadaId,
+  ) ?? null;
   const [turnoActual, setTurnoActual] = useState<TurnoActual>(
     () => obtenerTurnoActual(),
   );
@@ -787,6 +813,9 @@ function App() {
     setEquipos([]);
     setAverias([]);
     setMantenimientos([]);
+    setEmergencias([]);
+    detenerSirenaEmergencia();
+    setAlertaEmergencia(null);
     setIntervenciones([]);
     setNumeroBackup(null);
     setEquipoSeleccionado(null);
@@ -1160,12 +1189,91 @@ function App() {
     }
   }
 
+  async function enviarPushEmergencia(emergenciaId: number) {
+    try {
+      const excludeEndpoint = await obtenerEndpointPushActual();
+      const { error } = await supabase.functions.invoke("roac-web-push", {
+        body: {
+          accion: "EMERGENCIA_MINA",
+          emergenciaId,
+          excludeEndpoint,
+        },
+      });
+
+      if (error) {
+        console.error(
+          "La emergencia se guardó, pero falló la notificación Push:",
+          error,
+        );
+      }
+    } catch (error) {
+      console.error("Error no crítico enviando Push de emergencia:", error);
+    }
+  }
+
   function obtenerAudioContexto() {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext();
     }
 
     return audioContextRef.current;
+  }
+
+  function reproducirPulsoEmergencia() {
+    try {
+      const contexto = obtenerAudioContexto();
+      if (contexto.state === "suspended") {
+        void contexto.resume();
+      }
+
+      const inicio = contexto.currentTime + 0.02;
+      const tonos = [
+        { desfase: 0, frecuencia: 720 },
+        { desfase: 0.34, frecuencia: 980 },
+        { desfase: 0.68, frecuencia: 720 },
+      ];
+
+      tonos.forEach(({ desfase, frecuencia }) => {
+        const oscilador = contexto.createOscillator();
+        const ganancia = contexto.createGain();
+        const comienzo = inicio + desfase;
+        const termino = comienzo + 0.28;
+
+        oscilador.type = "sawtooth";
+        oscilador.frequency.setValueAtTime(frecuencia, comienzo);
+        ganancia.gain.setValueAtTime(0.0001, comienzo);
+        ganancia.gain.exponentialRampToValueAtTime(0.24, comienzo + 0.03);
+        ganancia.gain.exponentialRampToValueAtTime(0.0001, termino);
+        oscilador.connect(ganancia);
+        ganancia.connect(contexto.destination);
+        oscilador.start(comienzo);
+        oscilador.stop(termino + 0.02);
+      });
+    } catch (error) {
+      console.warn("No se pudo reproducir la sirena de emergencia:", error);
+    }
+  }
+
+  function detenerSirenaEmergencia() {
+    if (sirenaEmergenciaIntervalRef.current !== null) {
+      window.clearInterval(sirenaEmergenciaIntervalRef.current);
+      sirenaEmergenciaIntervalRef.current = null;
+    }
+    emergenciaSonandoIdRef.current = null;
+  }
+
+  function iniciarSirenaEmergencia(emergenciaId: number) {
+    if (emergenciaSonandoIdRef.current === emergenciaId) {
+      return;
+    }
+
+    detenerSirenaEmergencia();
+    emergenciaSonandoIdRef.current = emergenciaId;
+    reproducirPulsoEmergencia();
+    sirenaEmergenciaIntervalRef.current = window.setInterval(
+      reproducirPulsoEmergencia,
+      1800,
+    );
   }
 
   function reproducirAlertaSonora() {
@@ -1764,6 +1872,35 @@ function App() {
   }
 
 
+  async function cargarEmergencias() {
+    const { data, error } = await supabase
+      .from("emergencias_mina")
+      .select(
+        "id, tipo_emergencia, sector, descripcion, estado, fecha_inicio, fecha_fin, creada_por, finalizada_por",
+      )
+      .order("fecha_inicio", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("Error cargando emergencias de mina:", error);
+      return;
+    }
+
+    setEmergencias(
+      (data ?? []).map((registro) => ({
+        id: registro.id,
+        tipoEmergencia: registro.tipo_emergencia,
+        sector: registro.sector,
+        descripcion: registro.descripcion ?? "",
+        estado: registro.estado as "ACTIVA" | "FINALIZADA",
+        fechaInicio: registro.fecha_inicio,
+        fechaFin: registro.fecha_fin,
+        creadaPor: registro.creada_por,
+        finalizadaPor: registro.finalizada_por,
+      })),
+    );
+  }
+
   async function cargarMantenimientos() {
     const { data, error } = await supabase
       .from("mantenimientos")
@@ -1900,6 +2037,7 @@ function App() {
         cargarEquipos(),
         cargarAverias(),
         cargarMantenimientos(),
+        cargarEmergencias(),
         cargarIntervenciones(),
         cargarBackup(),
       ]);
@@ -2169,6 +2307,7 @@ function App() {
         cargarEquipos(),
         cargarAverias(),
         cargarMantenimientos(),
+        cargarEmergencias(),
         cargarIntervenciones(),
         cargarBackup(),
         cargarHistorialTurnos(),
@@ -2192,17 +2331,13 @@ function App() {
     }
 
     const parametros = new URLSearchParams(window.location.search);
+    const emergenciaDesdePush = parametros.get("emergencia");
     const averiaDesdePush = parametros.get("averia");
     const esPatronDesdePush = parametros.get("patron") === "1";
 
-    if (!averiaDesdePush) {
-      return;
-    }
-
-    const averiaId = Number(averiaDesdePush);
-
     function limpiarParametrosPush() {
       const urlLimpia = new URL(window.location.href);
+      urlLimpia.searchParams.delete("emergencia");
       urlLimpia.searchParams.delete("averia");
       urlLimpia.searchParams.delete("patron");
       window.history.replaceState(
@@ -2211,6 +2346,24 @@ function App() {
         `${urlLimpia.pathname}${urlLimpia.search}${urlLimpia.hash}`,
       );
     }
+
+    if (emergenciaDesdePush) {
+      const emergenciaId = Number(emergenciaDesdePush);
+      if (Number.isInteger(emergenciaId) && emergenciaId > 0) {
+        const existe = emergencias.some((emergencia) => emergencia.id === emergenciaId);
+        if (existe) {
+          void abrirDetalleEmergencia(emergenciaId);
+          limpiarParametrosPush();
+          return;
+        }
+      }
+    }
+
+    if (!averiaDesdePush) {
+      return;
+    }
+
+    const averiaId = Number(averiaDesdePush);
 
     if (!Number.isInteger(averiaId) || averiaId <= 0) {
       limpiarParametrosPush();
@@ -2355,7 +2508,50 @@ function App() {
     setAveriaSeleccionadaId(averiaId);
     setVista("detalle-averia");
     limpiarParametrosPush();
-  }, [sesion?.user.id, rol, datosOperacionalesListos]);
+  }, [sesion?.user.id, rol, datosOperacionalesListos, emergencias.length]);
+
+  useEffect(() => {
+    if (!sesion) {
+      detenerSirenaEmergencia();
+      setAlertaEmergencia(null);
+      return;
+    }
+
+    if (!emergenciaActiva) {
+      detenerSirenaEmergencia();
+      setAlertaEmergencia(null);
+      return;
+    }
+
+    let cancelado = false;
+    const deviceId = obtenerDeviceIdPersistente();
+
+    void (async () => {
+      const { data, error } = await supabase
+        .from("emergencias_reconocimientos")
+        .select("id")
+        .eq("emergencia_id", emergenciaActiva.id)
+        .eq("device_id", deviceId)
+        .maybeSingle();
+
+      if (cancelado) return;
+
+      if (error) {
+        console.error("No se pudo comprobar reconocimiento de emergencia:", error);
+      }
+
+      if (!data) {
+        setAlertaEmergencia(emergenciaActiva);
+        iniciarSirenaEmergencia(emergenciaActiva.id);
+      } else {
+        detenerSirenaEmergencia();
+      }
+    })();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [sesion?.user.id, emergenciaActiva?.id]);
 
   useEffect(() => {
     const turnoAnterior = turnoAnteriorRef.current;
@@ -2629,6 +2825,18 @@ function App() {
           (payload) => {
             console.log("[ROAC Realtime] mantenimientos:", payload);
             void cargarMantenimientos();
+          },
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "emergencias_mina",
+          },
+          (payload) => {
+            console.log("[ROAC Realtime] emergencias_mina:", payload);
+            void cargarEmergencias();
           },
         )
         .on(
@@ -3146,6 +3354,7 @@ const averiasCerradasEnTurno = averias.filter(
 
   function irAInicio() {
     setEquipoSeleccionado(null);
+    setEmergenciaSeleccionadaId(null);
     setEquipoHistorialSeleccionado(null);
     setAveriaSeleccionadaId(null);
     setMantenimientoSeleccionadoId(null);
@@ -3167,6 +3376,130 @@ const averiasCerradasEnTurno = averias.filter(
   function cancelarRegistro() {
     setEquipoSeleccionado(null);
     setVista("inicio");
+  }
+
+  function comenzarEmergencia() {
+    if (!exigirPermiso()) {
+      return;
+    }
+
+    if (emergenciaActiva) {
+      void abrirDetalleEmergencia(emergenciaActiva.id);
+      return;
+    }
+
+    setTipoEmergencia("");
+    setSectorEmergencia("");
+    setDescripcionEmergencia("");
+    setVista("registrar-emergencia");
+  }
+
+  async function reconocerEmergencia(emergenciaId: number) {
+    if (!sesion) return;
+
+    const deviceId = obtenerDeviceIdPersistente();
+    const { error } = await supabase
+      .from("emergencias_reconocimientos")
+      .upsert(
+        {
+          emergencia_id: emergenciaId,
+          device_id: deviceId,
+          user_id: sesion.user.id,
+          reconocido_at: new Date().toISOString(),
+        },
+        { onConflict: "emergencia_id,device_id" },
+      );
+
+    if (error) {
+      console.error("No se pudo registrar el reconocimiento de emergencia:", error);
+    }
+  }
+
+  async function abrirDetalleEmergencia(emergenciaId: number) {
+    detenerSirenaEmergencia();
+    setAlertaEmergencia(null);
+    setEmergenciaSeleccionadaId(emergenciaId);
+    setVista("detalle-emergencia");
+    await reconocerEmergencia(emergenciaId);
+  }
+
+  async function activarEmergenciaMina() {
+    if (!exigirPermiso() || !sesion) return;
+
+    const tipo = tipoEmergencia.trim();
+    const sector = sectorEmergencia.trim();
+    const descripcion = descripcionEmergencia.trim();
+
+    if (!tipo) {
+      alert("Indica el tipo de emergencia.");
+      return;
+    }
+    if (!sector) {
+      alert("Indica el sector o fase de la mina.");
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("emergencias_mina")
+      .insert({
+        tipo_emergencia: tipo,
+        sector,
+        descripcion,
+        estado: "ACTIVA",
+        creada_por: sesion.user.id,
+      })
+      .select(
+        "id, tipo_emergencia, sector, descripcion, estado, fecha_inicio, fecha_fin, creada_por, finalizada_por",
+      )
+      .single();
+
+    if (error || !data) {
+      console.error("No se pudo activar la emergencia:", error);
+      if (error?.code === "23505") {
+        alert("Ya existe una emergencia de mina activa.");
+        await cargarEmergencias();
+      } else {
+        alert("No se pudo activar la emergencia de mina.");
+      }
+      return;
+    }
+
+    await reconocerEmergencia(data.id);
+    detenerSirenaEmergencia();
+    void enviarPushEmergencia(data.id);
+    await cargarEmergencias();
+    setEmergenciaSeleccionadaId(data.id);
+    setVista("detalle-emergencia");
+  }
+
+  async function finalizarEmergenciaMina(emergenciaId: number) {
+    if (!exigirPermiso() || !sesion) return;
+
+    const confirmar = window.confirm(
+      "¿Confirmas que la emergencia de mina terminó? Se registrará la hora de término.",
+    );
+    if (!confirmar) return;
+
+    const { error } = await supabase
+      .from("emergencias_mina")
+      .update({
+        estado: "FINALIZADA",
+        fecha_fin: new Date().toISOString(),
+        finalizada_por: sesion.user.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", emergenciaId)
+      .eq("estado", "ACTIVA");
+
+    if (error) {
+      console.error("No se pudo finalizar la emergencia:", error);
+      alert("No se pudo finalizar la emergencia de mina.");
+      return;
+    }
+
+    detenerSirenaEmergencia();
+    setAlertaEmergencia(null);
+    await cargarEmergencias();
   }
 
   function comenzarMantenimiento() {
@@ -6245,6 +6578,57 @@ const averiasCerradasEnTurno = averias.filter(
         }
       `}</style>
 
+      {alertaEmergencia && (
+        <aside
+          role="alert"
+          aria-live="assertive"
+          style={{
+            position: "fixed",
+            left: "14px",
+            right: "14px",
+            top: "78px",
+            zIndex: 12000,
+            maxWidth: "620px",
+            margin: "0 auto",
+            padding: "18px",
+            borderRadius: "18px",
+            background: "linear-gradient(135deg, #8b0000 0%, #d11a2a 100%)",
+            color: "#fff",
+            boxShadow: "0 18px 45px rgba(120,0,0,.38)",
+            border: "2px solid rgba(255,255,255,.5)",
+          }}
+        >
+          <p style={{ margin: 0, fontWeight: 800, letterSpacing: ".08em" }}>
+            🚨 EMERGENCIA MINA EN CURSO
+          </p>
+          <h3 style={{ margin: "8px 0 5px", fontSize: "22px" }}>
+            {alertaEmergencia.tipoEmergencia}
+          </h3>
+          <p style={{ margin: "0 0 4px" }}>
+            <strong>Sector:</strong> {alertaEmergencia.sector}
+          </p>
+          {alertaEmergencia.descripcion && (
+            <p style={{ margin: "0 0 12px" }}>{alertaEmergencia.descripcion}</p>
+          )}
+          <button
+            type="button"
+            onClick={() => void abrirDetalleEmergencia(alertaEmergencia.id)}
+            style={{
+              width: "100%",
+              border: 0,
+              borderRadius: "12px",
+              padding: "12px 16px",
+              fontWeight: 800,
+              cursor: "pointer",
+              color: "#8b0000",
+              background: "#fff",
+            }}
+          >
+            Abrir emergencia y silenciar alarma
+          </button>
+        </aside>
+      )}
+
       {alertaPatronTecnico && (
         <aside
           className="new-fault-alert pattern-alert"
@@ -6530,6 +6914,35 @@ const averiasCerradasEnTurno = averias.filter(
 
       {vista === "inicio" && (
         <>
+          {emergenciaActiva && (
+            <button
+              type="button"
+              onClick={() => void abrirDetalleEmergencia(emergenciaActiva.id)}
+              style={{
+                width: "calc(100% - 28px)",
+                margin: "14px 14px 4px",
+                padding: "16px",
+                borderRadius: "16px",
+                border: "2px solid #ffb3b3",
+                background: "linear-gradient(135deg, #8b0000 0%, #d71920 100%)",
+                color: "#fff",
+                textAlign: "left",
+                cursor: "pointer",
+                boxShadow: "0 12px 28px rgba(151, 13, 13, .28)",
+              }}
+            >
+              <strong style={{ display: "block", fontSize: "18px" }}>
+                🚨 EMERGENCIA EN CURSO
+              </strong>
+              <span style={{ display: "block", marginTop: "5px" }}>
+                {emergenciaActiva.tipoEmergencia} · {emergenciaActiva.sector}
+              </span>
+              <small style={{ display: "block", marginTop: "5px", opacity: .9 }}>
+                Inicio {formatearFechaHoraChile(emergenciaActiva.fechaInicio)} · Toca para abrir
+              </small>
+            </button>
+          )}
+
           <section className="fleet-summary">
             <div className="summary-item summary-green">
               <strong>{equiposOperativos}</strong>
@@ -6606,6 +7019,101 @@ const averiasCerradasEnTurno = averias.filter(
                 + Mantenimiento programado
               </button>
             </div>
+          )}
+
+          {puedeModificar && (
+            <button
+              type="button"
+              onClick={comenzarEmergencia}
+              style={{
+                display: "flex",
+                width: "calc(100% - 28px)",
+                margin: "12px 14px 20px",
+                padding: "15px 16px",
+                borderRadius: "18px",
+                border: emergenciaActiva
+                  ? "2px solid #ff7b7b"
+                  : "1px solid #f09a9a",
+                background: emergenciaActiva
+                  ? "linear-gradient(135deg, #dc101f 0%, #9e0b15 100%)"
+                  : "linear-gradient(135deg, #fff8f8 0%, #ffe7e7 100%)",
+                color: emergenciaActiva ? "#fff" : "#8f1019",
+                boxShadow: emergenciaActiva
+                  ? "0 10px 28px rgba(190, 18, 32, 0.32)"
+                  : "0 8px 22px rgba(183, 28, 42, 0.12)",
+                cursor: "pointer",
+                alignItems: "center",
+                gap: "13px",
+                textAlign: "left",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: "46px",
+                  height: "46px",
+                  minWidth: "46px",
+                  borderRadius: "14px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: emergenciaActiva
+                    ? "rgba(255,255,255,0.18)"
+                    : "#c9101d",
+                  color: "#fff",
+                  fontSize: "23px",
+                  boxShadow: emergenciaActiva
+                    ? "none"
+                    : "0 6px 16px rgba(201, 16, 29, 0.28)",
+                }}
+              >
+                🚨
+              </span>
+
+              <span
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "3px",
+                }}
+              >
+                <span
+                  style={{
+                    fontWeight: 900,
+                    fontSize: "18px",
+                    lineHeight: 1.1,
+                    letterSpacing: "0.1px",
+                  }}
+                >
+                  {emergenciaActiva ? "EMERGENCIA EN CURSO" : "Emergencia mina"}
+                </span>
+                <span
+                  style={{
+                    fontWeight: 600,
+                    fontSize: "12.5px",
+                    lineHeight: 1.25,
+                    color: emergenciaActiva ? "#ffe2e2" : "#8f4449",
+                  }}
+                >
+                  {emergenciaActiva
+                    ? "Toca para revisar o finalizar la emergencia"
+                    : "Registrar y alertar una emergencia operacional"}
+                </span>
+              </span>
+
+              <span
+                aria-hidden="true"
+                style={{
+                  fontSize: "30px",
+                  lineHeight: 1,
+                  fontWeight: 500,
+                  color: emergenciaActiva ? "#fff" : "#c9101d",
+                }}
+              >
+                ›
+              </span>
+            </button>
           )}
 
           {mantenimientosEnCurso.length > 0 && (
@@ -8413,6 +8921,139 @@ const averiasCerradasEnTurno = averias.filter(
         </section>
       )}
 
+      {vista === "registrar-emergencia" && puedeModificar && (
+        <section className="fault-detail" style={{ maxWidth: "720px", margin: "0 auto" }}>
+          <button type="button" className="back-button" onClick={irAInicio}>
+            ← Volver
+          </button>
+
+          <div style={{
+            marginTop: "14px",
+            padding: "18px",
+            borderRadius: "18px",
+            border: "1px solid #f0b0b0",
+            background: "#fff7f7",
+          }}>
+            <p className="eyebrow eyebrow-dark">Emergencia mina</p>
+            <h2 style={{ color: "#a20d18", marginTop: "4px" }}>🚨 Activar emergencia</h2>
+            <p style={{ color: "#596273" }}>
+              Registra solo la información disponible en los primeros minutos.
+            </p>
+
+            <label style={{ display: "block", marginTop: "16px", fontWeight: 700 }}>
+              Tipo de emergencia
+            </label>
+            <input
+              list="tipos-emergencia-mina"
+              value={tipoEmergencia}
+              onChange={(evento) => setTipoEmergencia(evento.target.value)}
+              placeholder="Ej.: Amago de incendio"
+              style={{ width: "100%", marginTop: "6px", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e1" }}
+            />
+            <datalist id="tipos-emergencia-mina">
+              <option value="Amago de incendio" />
+              <option value="Incendio" />
+              <option value="Accidente" />
+              <option value="Derrame" />
+              <option value="Emergencia geotécnica" />
+              <option value="Rescate" />
+              <option value="Otro" />
+            </datalist>
+
+            <label style={{ display: "block", marginTop: "14px", fontWeight: 700 }}>
+              Sector / fase de mina
+            </label>
+            <input
+              value={sectorEmergencia}
+              onChange={(evento) => setSectorEmergencia(evento.target.value)}
+              placeholder="Ej.: Fase 3, sector norte"
+              style={{ width: "100%", marginTop: "6px", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e1" }}
+            />
+
+            <label style={{ display: "block", marginTop: "14px", fontWeight: 700 }}>
+              Breve descripción
+            </label>
+            <textarea
+              value={descripcionEmergencia}
+              onChange={(evento) => setDescripcionEmergencia(evento.target.value)}
+              placeholder="Información preliminar disponible..."
+              rows={4}
+              style={{ width: "100%", marginTop: "6px", padding: "12px", borderRadius: "10px", border: "1px solid #cbd5e1", resize: "vertical" }}
+            />
+
+            <button
+              type="button"
+              onClick={() => void activarEmergenciaMina()}
+              style={{
+                width: "100%",
+                marginTop: "20px",
+                padding: "16px 18px",
+                border: "1px solid #9f0b15",
+                borderRadius: "15px",
+                background: "linear-gradient(135deg, #d41120 0%, #9e0b15 100%)",
+                color: "#fff",
+                fontWeight: 900,
+                fontSize: "17px",
+                letterSpacing: "0.15px",
+                cursor: "pointer",
+                boxShadow: "0 9px 22px rgba(178, 13, 24, 0.24)",
+              }}
+            >
+              🚨 Activar emergencia
+            </button>
+          </div>
+        </section>
+      )}
+
+      {vista === "detalle-emergencia" && emergenciaSeleccionada && (
+        <section className="fault-detail" style={{ maxWidth: "720px", margin: "0 auto" }}>
+          <button type="button" className="back-button" onClick={irAInicio}>
+            ← Inicio
+          </button>
+
+          <div style={{
+            marginTop: "14px",
+            padding: "20px",
+            borderRadius: "18px",
+            border: emergenciaSeleccionada.estado === "ACTIVA" ? "2px solid #e03434" : "1px solid #cbd5e1",
+            background: emergenciaSeleccionada.estado === "ACTIVA" ? "#fff5f5" : "#fff",
+          }}>
+            <p style={{ margin: 0, fontWeight: 800, color: emergenciaSeleccionada.estado === "ACTIVA" ? "#b20d18" : "#526079" }}>
+              {emergenciaSeleccionada.estado === "ACTIVA" ? "🚨 EMERGENCIA EN CURSO" : "Emergencia finalizada"}
+            </p>
+            <h2 style={{ margin: "8px 0" }}>{emergenciaSeleccionada.tipoEmergencia}</h2>
+            <p><strong>Sector / fase:</strong> {emergenciaSeleccionada.sector}</p>
+            {emergenciaSeleccionada.descripcion && (
+              <p><strong>Descripción inicial:</strong> {emergenciaSeleccionada.descripcion}</p>
+            )}
+            <p><strong>Inicio:</strong> {formatearFechaHoraChile(emergenciaSeleccionada.fechaInicio)}</p>
+            {emergenciaSeleccionada.fechaFin && (
+              <p><strong>Término:</strong> {formatearFechaHoraChile(emergenciaSeleccionada.fechaFin)}</p>
+            )}
+
+            {puedeModificar && emergenciaSeleccionada.estado === "ACTIVA" && (
+              <button
+                type="button"
+                onClick={() => void finalizarEmergenciaMina(emergenciaSeleccionada.id)}
+                style={{
+                  width: "100%",
+                  marginTop: "14px",
+                  padding: "13px",
+                  border: 0,
+                  borderRadius: "12px",
+                  background: "#243247",
+                  color: "#fff",
+                  fontWeight: 800,
+                  cursor: "pointer",
+                }}
+              >
+                Finalizar emergencia
+              </button>
+            )}
+          </div>
+        </section>
+      )}
+
       {vista === "registrar-mantenimiento" && puedeModificar && equipoSeleccionado && (
         <section className="fault-form maintenance-form">
           <div className="form-header">
@@ -8847,7 +9488,9 @@ const averiasCerradasEnTurno = averias.filter(
         vista !== "seleccionar-backup" &&
         vista !== "seleccionar-equipo-mantenimiento" &&
         vista !== "registrar-mantenimiento" &&
-        vista !== "detalle-mantenimiento" && (
+        vista !== "detalle-mantenimiento" &&
+        vista !== "registrar-emergencia" &&
+        vista !== "detalle-emergencia" && (
           <nav className="bottom-navigation">
             <button
               type="button"
