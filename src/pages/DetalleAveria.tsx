@@ -141,6 +141,7 @@ function DetalleAveria({
   const [confirmacionPendiente, setConfirmacionPendiente] = useState<
     "MODIFICAR" | "CERRAR" | null
   >(null);
+  const [mensajeOperacion, setMensajeOperacion] = useState("");
   const [sistemaEditado, setSistemaEditado] = useState<SistemaAveria>(averia.sistema);
   const [ubicacionEditada, setUbicacionEditada] = useState(averia.ubicacion);
   const [detalleEditado, setDetalleEditado] = useState(averia.detalleInicial);
@@ -243,8 +244,20 @@ function DetalleAveria({
         fechaAviso: fechaAvisoEditada,
         horaAviso: horaAvisoEditada,
       });
-      alert(`Avería #${averia.id} modificada correctamente.`);
+
+      setMensajeOperacion(`Avería #${averia.id} modificada correctamente.`);
+      window.setTimeout(() => setMensajeOperacion(""), 3500);
+
       cancelarEdicion();
+
+      // Al desaparecer el formulario, WebKit/iOS puede conservar una posición
+      // de scroll mayor que la nueva altura del documento y dejar un gran
+      // espacio vacío. Reposicionamos la vista una vez que React actualiza.
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        });
+      });
     } catch (error) {
       console.error("Error al modificar avería:", error);
       alert("No se pudo guardar la modificación. Los datos originales se mantienen.");
@@ -456,6 +469,24 @@ function DetalleAveria({
       )}
 
       <section className="fault-detail">
+      {mensajeOperacion && (
+        <div
+          role="status"
+          style={{
+            marginBottom: "14px",
+            padding: "12px 14px",
+            borderRadius: "12px",
+            border: "1px solid #86efac",
+            background: "#f0fdf4",
+            color: "#166534",
+            fontWeight: 800,
+            textAlign: "center",
+          }}
+        >
+          {mensajeOperacion}
+        </div>
+      )}
+
       <button
         type="button"
         className="back-button"

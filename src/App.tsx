@@ -3462,7 +3462,31 @@ const averiasCerradasEnTurno = averias.filter(
       throw error;
     }
 
-    await cargarAverias();
+    // La modificación YA quedó confirmada por Supabase.
+    // Actualizamos la avería seleccionada inmediatamente para no bloquear
+    // la interfaz esperando una recarga completa (en iOS/PWA esa consulta
+    // puede quedar pendiente aunque el UPDATE ya se haya ejecutado).
+    const fechaAvisoActualizada = fechaChile.toISOString();
+
+    setAverias((anteriores) =>
+      anteriores.map((averia) =>
+        averia.id === averiaSeleccionadaId
+          ? {
+              ...averia,
+              sistema: datos.sistema,
+              ubicacion: datos.ubicacion,
+              detalleInicial: datos.detalleInicial,
+              informadoPor: datos.informadoPor,
+              fechaAviso: fechaAvisoActualizada,
+              horaAviso: datos.horaAviso,
+            }
+          : averia,
+      ),
+    );
+
+    // Reconciliación de respaldo: mantiene la fuente de verdad en Supabase,
+    // pero nunca impide que el usuario termine la operación.
+    void cargarAverias();
   }
 
   async function tomarAveria(responsable: string) {
