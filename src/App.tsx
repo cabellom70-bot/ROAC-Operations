@@ -566,6 +566,40 @@ function sonAveriasEspecificamenteSimilares(
   return comunes >= 2 && similitud >= 0.4;
 }
 
+function esEventoRutinarioExcluidoDePatron(
+  sistema: string,
+  detalle: string,
+) {
+  const texto = normalizarTextoPatron(`${sistema} ${detalle}`);
+
+  // Estos eventos corresponden a tareas rutinarias o programadas y no deben
+  // contaminar los patrones técnicos de falla. La exclusión es deliberadamente
+  // específica para no ocultar síntomas reales como "bajo nivel de aceite",
+  // "fuga de aceite" o una "falla del sistema AdBlue".
+  const frasesRutinarias = [
+    "relleno adblue",
+    "relleno de adblue",
+    "carga adblue",
+    "carga de adblue",
+    "abastecimiento adblue",
+    "abastecimiento de adblue",
+    "relleno de niveles",
+    "relleno niveles",
+    "chequeo y relleno de niveles",
+    "chequeo relleno de niveles",
+    "revision y relleno de niveles",
+    "revision relleno de niveles",
+    "engrase general",
+    "lubricacion programada",
+    "lubricacion general",
+    "engrase programado",
+    "chequeo de niveles programado",
+    "revision de niveles programada",
+  ];
+
+  return frasesRutinarias.some((frase) => texto.includes(frase));
+}
+
 function obtenerFamiliaTecnica(sistema: string, detalle: string) {
   const texto = normalizarTextoPatron(`${sistema} ${detalle}`);
   const incluye = (...terminos: string[]) =>
@@ -1230,6 +1264,7 @@ function App() {
     numeroMina: string,
     averiaId: number,
     enviarPushPatron = false,
+    forzarMostrar = false,
   ) {
     const { data, error } = await supabase
       .from("averias")
@@ -1252,13 +1287,35 @@ function App() {
     const actual = registros.find((registro) => registro.id === averiaId);
     if (!actual) return;
 
-    const similares = registros.filter((registro) =>
+    // Una tarea rutinaria/programada nunca puede originar un patrón técnico.
+    if (
+      esEventoRutinarioExcluidoDePatron(
+        actual.sistema,
+        actual.detalleInicial,
+      )
+    ) {
+      return;
+    }
+
+    // Para una notificación antigua reconstruimos el patrón tal como existía
+    // cuando se publicó ESA avería, sin mezclar fallas posteriores.
+    const instanteActual = new Date(actual.fechaAviso).getTime();
+    const registrosHastaActual = registros.filter(
+      (registro) =>
+        new Date(registro.fechaAviso).getTime() <= instanteActual &&
+        !esEventoRutinarioExcluidoDePatron(
+          registro.sistema,
+          registro.detalleInicial,
+        ),
+    );
+
+    const similares = registrosHastaActual.filter((registro) =>
       sonAveriasEspecificamenteSimilares(actual, registro),
     );
 
     const familiaActual = obtenerFamiliaTecnica(actual.sistema, actual.detalleInicial);
     const mismaFamilia = familiaActual
-      ? registros.filter(
+      ? registrosHastaActual.filter(
           (registro) =>
             obtenerFamiliaTecnica(registro.sistema, registro.detalleInicial) === familiaActual,
         )
@@ -1272,7 +1329,7 @@ function App() {
     if (!disparaReincidencia && !disparaFamilia) return;
 
     const claveAlerta = `${averiaId}:${disparaReincidencia ? similares.length : 0}:${disparaFamilia ? mismaFamilia.length : 0}`;
-    if (patronesAlertadosRef.current.has(claveAlerta)) return;
+    if (patronesAlertadosRef.current.has(claveAlerta) && !forzarMostrar) return;
     patronesAlertadosRef.current.add(claveAlerta);
 
     const tipo: TipoAlertaPatron =
@@ -1321,10 +1378,30 @@ function App() {
     });
     reproducirAlertaPatronTecnico();
 
-    // Solo el dispositivo que PUBLICÓ la avería solicita el Push de patrón.
-    // Los demás dispositivos ya muestran la alerta por Realtime y no deben
-    // volver a disparar el mismo Push, evitando duplicados masivos.
+    // Solo el dispositivo que PUBLICÓ la avería registra y solicita el Push.
+    // Guardamos el snapshot exacto del patrón para que en el futuro sepamos
+    // qué avería lo disparó y cuáles fueron los eventos relacionados.
     if (enviarPushPatron) {
+      const { error: errorRegistroPatron } = await supabase.rpc(
+        "registrar_alerta_patron_tecnico",
+        {
+          p_averia_disparadora_id: averiaId,
+          p_equipo_id: equipoId,
+          p_tipo_patron: tipo,
+          p_familia: familiaActual,
+          p_cantidad_reincidencia: similares.length,
+          p_cantidad_familia: mismaFamilia.length,
+          p_averias_relacionadas: relacionados,
+        },
+      );
+
+      if (errorRegistroPatron) {
+        console.error(
+          "La alerta se detectó, pero no se pudo guardar su historial:",
+          errorRegistroPatron,
+        );
+      }
+
       void enviarPushOperacional("PATRON_TECNICO", averiaId, {
         tipo,
         familia: familiaActual,
@@ -1333,12 +1410,14 @@ function App() {
       });
     }
 
-    // La advertencia permanece más tiempo que una avería normal para permitir
-    // leer los antecedentes que provocaron el patrón.
-    alertaPatronTimeoutRef.current = window.setTimeout(() => {
-      setAlertaPatronTecnico(null);
-      alertaPatronTimeoutRef.current = null;
-    }, 25_000);
+    // Cuando se abre desde una Push, la advertencia queda visible hasta que
+    // el usuario la cierre. En una alerta normal conserva el cierre automático.
+    if (!forzarMostrar) {
+      alertaPatronTimeoutRef.current = window.setTimeout(() => {
+        setAlertaPatronTecnico(null);
+        alertaPatronTimeoutRef.current = null;
+      }, 25_000);
+    }
   }
 
   function reproducirAlertaEquipoOperativo() {
@@ -2114,6 +2193,7 @@ function App() {
 
     const parametros = new URLSearchParams(window.location.search);
     const averiaDesdePush = parametros.get("averia");
+    const esPatronDesdePush = parametros.get("patron") === "1";
 
     if (!averiaDesdePush) {
       return;
@@ -2121,14 +2201,145 @@ function App() {
 
     const averiaId = Number(averiaDesdePush);
 
-    if (!Number.isInteger(averiaId) || averiaId <= 0) {
+    function limpiarParametrosPush() {
       const urlLimpia = new URL(window.location.href);
       urlLimpia.searchParams.delete("averia");
+      urlLimpia.searchParams.delete("patron");
       window.history.replaceState(
         {},
         "",
         `${urlLimpia.pathname}${urlLimpia.search}${urlLimpia.hash}`,
       );
+    }
+
+    if (!Number.isInteger(averiaId) || averiaId <= 0) {
+      limpiarParametrosPush();
+      return;
+    }
+
+    if (esPatronDesdePush) {
+      void (async () => {
+        // Primero intentamos leer el snapshot exacto guardado cuando se generó
+        // la alerta. Así no dependemos de recalcular el patrón tiempo después.
+        const { data: alertaGuardada, error: errorAlertaGuardada } =
+          await supabase
+            .from("alertas_patron_tecnico")
+            .select(`
+              tipo_patron,
+              familia,
+              cantidad_reincidencia,
+              cantidad_familia,
+              averias_relacionadas,
+              equipos (
+                numero_mina
+              )
+            `)
+            .eq("averia_disparadora_id", averiaId)
+            .maybeSingle();
+
+        if (!errorAlertaGuardada && alertaGuardada) {
+          const equipoDb = Array.isArray(alertaGuardada.equipos)
+            ? alertaGuardada.equipos[0]
+            : alertaGuardada.equipos;
+
+          const tipo = alertaGuardada.tipo_patron as TipoAlertaPatron;
+          const familia = alertaGuardada.familia ?? "";
+          const cantidadReincidencia =
+            alertaGuardada.cantidad_reincidencia ?? 0;
+          const cantidadFamilia = alertaGuardada.cantidad_familia ?? 0;
+          const relacionados = Array.isArray(
+            alertaGuardada.averias_relacionadas,
+          )
+            ? (alertaGuardada.averias_relacionadas as RegistroPatronAveria[])
+            : [];
+
+          let titulo = "Advertencia de patrón técnico";
+          let mensaje =
+            `El equipo registra ${cantidadFamilia} fallas relacionadas` +
+            `${familia ? ` con ${familia}` : ""}.`;
+
+          if (tipo === "REINCIDENCIA") {
+            titulo = "Posible reincidencia detectada";
+            mensaje =
+              `El equipo registra ${cantidadReincidencia} detenciones con motivo ` +
+              "o descripción iguales o técnicamente similares.";
+          } else if (tipo === "DOBLE") {
+            titulo = "Reincidencia y patrón técnico detectados";
+            mensaje =
+              `Se detectaron ${cantidadReincidencia} detenciones similares y, además, ` +
+              `${cantidadFamilia} fallas relacionadas` +
+              `${familia ? ` con ${familia}` : ""}.`;
+          }
+
+          cerrarAlertaNuevaAveria();
+          cerrarAlertaPatronTecnico();
+          setAlertaPatronTecnico({
+            tipo,
+            numeroMina: equipoDb?.numero_mina ?? "Equipo",
+            averiaId,
+            titulo,
+            mensaje,
+            familia,
+            cantidadReincidencia,
+            cantidadFamilia,
+            relacionados,
+          });
+          reproducirAlertaPatronTecnico();
+          limpiarParametrosPush();
+          return;
+        }
+
+        if (errorAlertaGuardada) {
+          console.warn(
+            `[ROAC Push] No se pudo leer el patrón guardado de la avería #${averiaId}; se intentará reconstruir.`,
+            errorAlertaGuardada,
+          );
+        }
+
+        // Compatibilidad con alertas antiguas creadas antes de existir la tabla
+        // alertas_patron_tecnico: se reconstruyen con la lógica histórica.
+        const { data, error } = await supabase
+          .from("averias")
+          .select(`
+            id,
+            equipo_id,
+            equipos (
+              numero_mina
+            )
+          `)
+          .eq("id", averiaId)
+          .single();
+
+        if (error || !data) {
+          console.error(
+            `[ROAC Push] No se pudo reconstruir el patrón de la avería #${averiaId}:`,
+            error,
+          );
+          return;
+        }
+
+        const equipoDb = Array.isArray(data.equipos)
+          ? data.equipos[0]
+          : data.equipos;
+
+        if (!equipoDb?.numero_mina) {
+          console.warn(
+            `[ROAC Push] La avería #${averiaId} no tiene equipo asociado.`,
+          );
+          return;
+        }
+
+        await evaluarPatronesTecnicosAveria(
+          data.equipo_id,
+          equipoDb.numero_mina,
+          averiaId,
+          false,
+          true,
+        );
+
+        limpiarParametrosPush();
+      })();
+
       return;
     }
 
@@ -2143,16 +2354,7 @@ function App() {
 
     setAveriaSeleccionadaId(averiaId);
     setVista("detalle-averia");
-
-    // Quitamos el parámetro una vez consumido para que una recarga posterior
-    // no vuelva a abrir la misma avería automáticamente.
-    const urlLimpia = new URL(window.location.href);
-    urlLimpia.searchParams.delete("averia");
-    window.history.replaceState(
-      {},
-      "",
-      `${urlLimpia.pathname}${urlLimpia.search}${urlLimpia.hash}`,
-    );
+    limpiarParametrosPush();
   }, [sesion?.user.id, rol, datosOperacionalesListos]);
 
   useEffect(() => {
