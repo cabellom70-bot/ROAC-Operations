@@ -2108,6 +2108,54 @@ function App() {
   }, [sesion?.user.id, rol]);
 
   useEffect(() => {
+    if (!sesion || !rol || !datosOperacionalesListos) {
+      return;
+    }
+
+    const parametros = new URLSearchParams(window.location.search);
+    const averiaDesdePush = parametros.get("averia");
+
+    if (!averiaDesdePush) {
+      return;
+    }
+
+    const averiaId = Number(averiaDesdePush);
+
+    if (!Number.isInteger(averiaId) || averiaId <= 0) {
+      const urlLimpia = new URL(window.location.href);
+      urlLimpia.searchParams.delete("averia");
+      window.history.replaceState(
+        {},
+        "",
+        `${urlLimpia.pathname}${urlLimpia.search}${urlLimpia.hash}`,
+      );
+      return;
+    }
+
+    const averiaExiste = averias.some((averia) => averia.id === averiaId);
+
+    if (!averiaExiste) {
+      console.warn(
+        `[ROAC Push] No se encontró la avería #${averiaId} al abrir la notificación.`,
+      );
+      return;
+    }
+
+    setAveriaSeleccionadaId(averiaId);
+    setVista("detalle-averia");
+
+    // Quitamos el parámetro una vez consumido para que una recarga posterior
+    // no vuelva a abrir la misma avería automáticamente.
+    const urlLimpia = new URL(window.location.href);
+    urlLimpia.searchParams.delete("averia");
+    window.history.replaceState(
+      {},
+      "",
+      `${urlLimpia.pathname}${urlLimpia.search}${urlLimpia.hash}`,
+    );
+  }, [sesion?.user.id, rol, datosOperacionalesListos]);
+
+  useEffect(() => {
     const turnoAnterior = turnoAnteriorRef.current;
 
     if (turnoAnterior.claveTurno === turnoActual.claveTurno) {
