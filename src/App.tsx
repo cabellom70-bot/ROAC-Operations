@@ -1961,7 +1961,7 @@ function App() {
           mantenimientos: mantenimientosTurno,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "clave_turno" },
+        { onConflict: "clave_turno", ignoreDuplicates: true },
       );
 
     if (error) {
