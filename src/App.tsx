@@ -4750,27 +4750,46 @@ const averiasCerradasEnTurno = averias.filter(
           background: linear-gradient(180deg, #fafaff 0%, #f5f3ff 100%);
         }
 
-        /* Contraste del resumen de equipo seleccionado.
-           Evita texto blanco sobre el panel claro tanto en averías como en mantenimiento. */
+        /* Resumen de equipo seleccionado para AVERÍAS:
+           el panel original es oscuro, por lo que necesita texto claro. */
         .selected-equipment {
-          color: #172033;
+          color: #ffffff;
         }
 
         .selected-equipment .eyebrow {
-          color: #5b6f91;
+          color: #b9d7ff;
         }
 
         .selected-equipment h3 {
-          color: #172033;
+          color: #ffffff;
         }
 
         .selected-equipment p,
         .selected-equipment strong {
-          color: #334155;
+          color: #e6f0ff;
         }
 
         .selected-equipment .continue-button {
           color: #ffffff;
+        }
+
+        /* MANTENIMIENTO usa un panel claro; aquí se aplica el contraste oscuro
+           solo a ese caso, sin afectar el selector de averías. */
+        .selected-equipment.maintenance-selected {
+          color: #172033;
+        }
+
+        .selected-equipment.maintenance-selected .eyebrow {
+          color: #5b6f91;
+        }
+
+        .selected-equipment.maintenance-selected h3 {
+          color: #172033;
+        }
+
+        .selected-equipment.maintenance-selected p,
+        .selected-equipment.maintenance-selected strong {
+          color: #334155;
         }
 
         .maintenance-form {
