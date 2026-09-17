@@ -3751,16 +3751,22 @@ const averiasCerradasEnTurno = averias.filter(
     );
 
     if (canalAveriasBroadcastRef.current) {
-      await canalAveriasBroadcastRef.current.send({
-        type: "broadcast",
-        event: "averia_changed",
-        payload: {
-          accion: "EQUIPO_OPERATIVO",
-          averiaId: averiaSeleccionadaId,
-          equipoId: equipoCerradoDb.id,
-          trabajoRealizado,
-        },
-      });
+      // El cierre ya quedó confirmado en Supabase. Broadcast es una ayuda
+      // de sincronización y jamás debe bloquear la interfaz local (especialmente iOS).
+      void canalAveriasBroadcastRef.current
+        .send({
+          type: "broadcast",
+          event: "averia_changed",
+          payload: {
+            accion: "EQUIPO_OPERATIVO",
+            averiaId: averiaSeleccionadaId,
+            equipoId: equipoCerradoDb.id,
+            trabajoRealizado,
+          },
+        })
+        .catch((error) => {
+          console.error("No se pudo emitir Broadcast de equipo operativo:", error);
+        });
     }
 
     const horaCierre = obtenerHoraActual();

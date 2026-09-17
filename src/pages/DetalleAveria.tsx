@@ -137,6 +137,10 @@ function DetalleAveria({
   const [edicionAutorizada, setEdicionAutorizada] = useState(false);
   const [pinAutorizado, setPinAutorizado] = useState("");
   const [guardandoEdicion, setGuardandoEdicion] = useState(false);
+  const [cerrandoAveria, setCerrandoAveria] = useState(false);
+  const [confirmacionPendiente, setConfirmacionPendiente] = useState<
+    "MODIFICAR" | "CERRAR" | null
+  >(null);
   const [sistemaEditado, setSistemaEditado] = useState<SistemaAveria>(averia.sistema);
   const [ubicacionEditada, setUbicacionEditada] = useState(averia.ubicacion);
   const [detalleEditado, setDetalleEditado] = useState(averia.detalleInicial);
@@ -187,7 +191,15 @@ function DetalleAveria({
     }
   }
 
-  async function guardarModificacion() {
+  function cerrarTecladoActivo() {
+    const activo = document.activeElement;
+
+    if (activo instanceof HTMLElement) {
+      activo.blur();
+    }
+  }
+
+  function solicitarGuardarModificacion() {
     if (!pinAutorizado) {
       alert("La autorización de edición ya no está disponible. Ingresa nuevamente el PIN.");
       cancelarEdicion();
@@ -204,15 +216,21 @@ function DetalleAveria({
       return;
     }
 
-    const confirmar = window.confirm(
-      `¿Confirmas la modificación de la avería #${averia.id}?
+    // En iOS/PWA evitamos depender de window.confirm().
+    // Primero quitamos el foco del input para cerrar el teclado y luego
+    // mostramos una confirmación controlada por React.
+    cerrarTecladoActivo();
+    window.requestAnimationFrame(() => {
+      setConfirmacionPendiente("MODIFICAR");
+    });
+  }
 
-La corrección quedará registrada en la auditoría.`,
-    );
-
-    if (!confirmar) {
+  async function confirmarGuardarModificacion() {
+    if (guardandoEdicion || !pinAutorizado) {
       return;
     }
+
+    setConfirmacionPendiente(null);
 
     try {
       setGuardandoEdicion(true);
@@ -244,13 +262,38 @@ La corrección quedará registrada en la auditoría.`,
     void onTomar(responsable.trim());
   }
 
-  function cerrarAveria() {
+  function solicitarCerrarAveria() {
     if (trabajoRealizado.trim() === "") {
       alert("Escribe el trabajo realizado.");
       return;
     }
 
-    void onCerrar(trabajoRealizado.trim());
+    cerrarTecladoActivo();
+    window.requestAnimationFrame(() => {
+      setConfirmacionPendiente("CERRAR");
+    });
+  }
+
+  async function confirmarCerrarAveria() {
+    if (cerrandoAveria) {
+      return;
+    }
+
+    const trabajo = trabajoRealizado.trim();
+
+    if (!trabajo) {
+      setConfirmacionPendiente(null);
+      return;
+    }
+
+    setConfirmacionPendiente(null);
+
+    try {
+      setCerrandoAveria(true);
+      await onCerrar(trabajo);
+    } finally {
+      setCerrandoAveria(false);
+    }
   }
 
   async function registrarAvance() {
@@ -299,7 +342,120 @@ La corrección quedará registrada en la auditoría.`,
       averia.estadoAveria === "Cerrada");
 
   return (
-    <section className="fault-detail">
+    <>
+      {confirmacionPendiente && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="roac-confirm-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            display: "grid",
+            placeItems: "center",
+            padding: "20px",
+            background: "rgba(15, 23, 42, 0.58)",
+            WebkitOverflowScrolling: "touch",
+          }}
+          onClick={() => {
+            if (!guardandoEdicion && !cerrandoAveria) {
+              setConfirmacionPendiente(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              width: "min(92vw, 430px)",
+              maxHeight: "calc(100dvh - 40px)",
+              overflowY: "auto",
+              borderRadius: "18px",
+              background: "#ffffff",
+              boxShadow: "0 24px 70px rgba(15, 23, 42, 0.30)",
+              padding: "22px",
+              color: "#172033",
+            }}
+            onClick={(evento) => evento.stopPropagation()}
+          >
+            <p
+              style={{
+                margin: "0 0 6px",
+                color: "#b45309",
+                fontWeight: 900,
+                fontSize: "0.78rem",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase",
+              }}
+            >
+              Confirmación ROAC
+            </p>
+
+            <h3
+              id="roac-confirm-title"
+              style={{ margin: "0 0 12px", fontSize: "1.25rem" }}
+            >
+              {confirmacionPendiente === "MODIFICAR"
+                ? "Confirmar modificación"
+                : "Confirmar cierre de avería"}
+            </h3>
+
+            {confirmacionPendiente === "MODIFICAR" ? (
+              <p style={{ margin: "0 0 20px", lineHeight: 1.5 }}>
+                ¿Confirmas la modificación de la avería <strong>#{averia.id}</strong>?
+                <br />
+                La corrección quedará registrada en la auditoría.
+              </p>
+            ) : (
+              <p style={{ margin: "0 0 20px", lineHeight: 1.5 }}>
+                ¿Confirmas cerrar la avería <strong>#{averia.id}</strong> y dejar el
+                equipo <strong>{averia.equipo.numeroMina}</strong> operativo?
+              </p>
+            )}
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "10px",
+              }}
+            >
+              <button
+                type="button"
+                className="back-button"
+                disabled={guardandoEdicion || cerrandoAveria}
+                onClick={() => setConfirmacionPendiente(null)}
+                style={{ width: "100%", margin: 0 }}
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                className={
+                  confirmacionPendiente === "MODIFICAR"
+                    ? "save-fault-button"
+                    : "close-fault-button"
+                }
+                disabled={guardandoEdicion || cerrandoAveria}
+                onClick={() => {
+                  if (confirmacionPendiente === "MODIFICAR") {
+                    void confirmarGuardarModificacion();
+                  } else {
+                    void confirmarCerrarAveria();
+                  }
+                }}
+                style={{ width: "100%", margin: 0 }}
+              >
+                {confirmacionPendiente === "MODIFICAR"
+                  ? "Confirmar"
+                  : "Cerrar avería"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <section className="fault-detail">
       <button
         type="button"
         className="back-button"
@@ -532,8 +688,8 @@ La corrección quedará registrada en la auditoría.`,
           <button
             type="button"
             className="save-fault-button"
-            disabled={guardandoEdicion}
-            onClick={() => void guardarModificacion()}
+            disabled={guardandoEdicion || cerrandoAveria}
+            onClick={solicitarGuardarModificacion}
           >
             {guardandoEdicion ? "Guardando..." : "Guardar modificación"}
           </button>
@@ -728,9 +884,12 @@ La corrección quedará registrada en la auditoría.`,
                 <button
                   type="button"
                   className="close-fault-button"
-                  onClick={cerrarAveria}
+                  disabled={cerrandoAveria || guardandoEdicion}
+                  onClick={solicitarCerrarAveria}
                 >
-                  Cerrar avería y dejar operativo
+                  {cerrandoAveria
+                    ? "Cerrando avería..."
+                    : "Cerrar avería y dejar operativo"}
                 </button>
               </div>
             </>
@@ -799,7 +958,8 @@ La corrección quedará registrada en la auditoría.`,
           </div>
         </>
       )}
-    </section>
+      </section>
+    </>
   );
 }
 
