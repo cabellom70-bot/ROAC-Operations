@@ -4092,7 +4092,7 @@ const averiasCerradasEnTurno = averias.filter(
   try {
     const fechaAtencion = new Date().toISOString();
 
-    const { error: errorAveria } = await supabase
+    const { data: tomada, error: errorAveria } = await supabase
       .from("averias")
       .update({
         estado_averia: "En atención",
@@ -4100,11 +4100,15 @@ const averiasCerradasEnTurno = averias.filter(
         tomada_por: responsable,
         fecha_atencion: fechaAtencion,
       })
-      .eq("id", averiaSeleccionadaId);
+      .eq("id", averiaSeleccionadaId)
+      .eq("estado_averia", "Publicada")
+      .select("id")
+      .maybeSingle();
 
-    if (errorAveria) {
+    if (errorAveria || !tomada) {
       console.error(errorAveria);
-      alert("No se pudo tomar la avería en Supabase.");
+      alert("No se pudo tomar la avería. Puede haber sido tomada o cerrada por otro técnico. Actualiza los datos antes de reintentar.");
+      await cargarAverias();
       return;
     }
 
@@ -4314,39 +4318,14 @@ const averiasCerradasEnTurno = averias.filter(
   try {
     const fechaCierre = new Date().toISOString();
 
-    const { error: errorAveria } = await supabase
-      .from("averias")
-      .update({
-        estado_averia: "Cerrada",
-        estado_equipo: "Operativo",
-        trabajo_realizado: trabajoRealizado,
-        fecha_cierre: fechaCierre,
-      })
-      .eq("id", averiaSeleccionadaId);
-
-    if (errorAveria) {
-      console.error(errorAveria);
-      alert("No se pudo cerrar la avería en Supabase.");
-      return;
-    }
-
-    const { data: equipoCerradoDb, error: errorEquipo } = await supabase
-      .from("equipos")
-      .update({
-        estado: "Operativo",
-      })
-      .eq(
-        "numero_mina",
-        averiaActual.equipo.numeroMina,
-      )
-      .select("id")
-      .single();
-
-    if (errorEquipo || !equipoCerradoDb) {
-      console.error(errorEquipo);
-      alert(
-        "La avería se cerró, pero no se pudo restaurar el equipo a Operativo.",
-      );
+    const { data: equipoIdCerrado, error: errorCierre } = await supabase.rpc(
+      "roac_cerrar_averia_atomica",
+      { p_averia_id: averiaSeleccionadaId, p_trabajo: trabajoRealizado },
+    );
+    if (errorCierre || !equipoIdCerrado) {
+      console.error(errorCierre);
+      alert("No se pudo confirmar el cierre. Actualiza los datos antes de reintentar; otro técnico podría haberlo cerrado.");
+      await Promise.all([cargarAverias(), cargarEquipos()]);
       return;
     }
 
@@ -4367,7 +4346,7 @@ const averiasCerradasEnTurno = averias.filter(
           payload: {
             accion: "EQUIPO_OPERATIVO",
             averiaId: averiaSeleccionadaId,
-            equipoId: equipoCerradoDb.id,
+            equipoId: equipoIdCerrado,
             trabajoRealizado,
           },
         })

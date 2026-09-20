@@ -14,23 +14,8 @@ self.addEventListener("push", (event) => {
         };
       }
 
-      // Si ROAC está realmente visible en pantalla, no mostramos
-      // una segunda notificación del sistema: Realtime ya muestra
-      // la alerta interna y reproduce el sonido.
-      const ventanas = await clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-
-      const roacVisible = ventanas.some(
-        (ventana) =>
-          ventana.visibilityState === "visible",
-      );
-
-      if (roacVisible) {
-        return;
-      }
-
+      // Una ventana visible no confirma la recepción de Realtime.
+      // Mostrar el push evita perder el aviso cuando el canal está desconectado.
       const titulo =
         datos.title || "ROAC Operations";
 
@@ -44,7 +29,7 @@ self.addEventListener("push", (event) => {
           datos.badge || "/roac-logo.png",
         tag:
           datos.tag ||
-          "roac-operational-event",
+          ["roac", datos.tipo || "evento", datos.averiaId || datos.emergenciaId || "general"].join("-"),
         renotify: true,
         requireInteraction: Boolean(
           datos.requireInteraction,
