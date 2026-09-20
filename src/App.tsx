@@ -1,7 +1,6 @@
 ﻿import { supabase } from "./lib/supabase";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { jsPDF } from "jspdf";
 
 import "./App.css";
 
@@ -481,15 +480,6 @@ function formatearTiempoFueraServicio(
   return `${horasTexto} h ${minutosTexto} min`;
 }
 
-function obtenerHoraActual() {
-  return new Date().toLocaleTimeString("es-CL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-}
-
-
 type TipoAlertaPatron = "REINCIDENCIA" | "CONCENTRACION" | "DOBLE";
 
 type RegistroPatronAveria = {
@@ -660,7 +650,7 @@ function App() {
   const [tipoEmergencia, setTipoEmergencia] = useState("");
   const [sectorEmergencia, setSectorEmergencia] = useState("");
   const [descripcionEmergencia, setDescripcionEmergencia] = useState("");
-  const [alertaEmergencia, setAlertaEmergencia] = useState<EmergenciaMina | null>(null);
+  const [alertaEmergenciaGuardada, setAlertaEmergencia] = useState<EmergenciaMina | null>(null);
   const [numeroBackup, setNumeroBackup] =
     useState<string | null>(null);
 
@@ -692,7 +682,7 @@ function App() {
 
   // Diagnóstico temporal de Supabase Realtime.
   // Nos permitirá comprobar desde PC y celular si el canal realmente queda conectado.
-  const [estadoRealtime, setEstadoRealtime] = useState("CONECTANDO");
+  const [estadoRealtimeConexion, setEstadoRealtime] = useState("CONECTANDO");
 
   const [estadoPush, setEstadoPush] = useState<
     "NO_COMPATIBLE" | "NO_INSTALADA" | "PENDIENTE" | "ACTIVANDO" | "ACTIVA" | "BLOQUEADA" | "ERROR"
@@ -717,8 +707,12 @@ function App() {
   const canalAveriasBroadcastRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const averiasAlertadasRef = useRef<Set<number>>(new Set());
 
+  const usuarioId = sesion?.user.id ?? null;
+  const estadoRealtime = usuarioId && rol ? estadoRealtimeConexion : "CERRADO";
   const puedeModificar = rol === "operaciones";
   const emergenciaActiva = emergencias.find((emergencia) => emergencia.estado === "ACTIVA") ?? null;
+  const alertaEmergencia = usuarioId && emergenciaActiva?.id === alertaEmergenciaGuardada?.id
+    ? alertaEmergenciaGuardada : null;
   const emergenciaSeleccionada = emergencias.find(
     (emergencia) => emergencia.id === emergenciaSeleccionadaId,
   ) ?? null;
@@ -727,10 +721,14 @@ function App() {
   );
   const turnoAnteriorRef = useRef<TurnoActual>(turnoActual);
   const [historialTurnos, setHistorialTurnos] = useState<StatusTurnoGuardado[]>([]);
+  const generandoPdfRef = useRef(false);
+  const [generandoPdf, setGenerandoPdf] = useState(false);
   const [informeTurno, setInformeTurno] = useState<InformeTurnoSnapshot | null>(null);
   const [claveHistorialAbierto, setClaveHistorialAbierto] = useState<string | null>(null);
   const [mesHistorialAbierto, setMesHistorialAbierto] = useState<string | null>(null);
-  const [datosOperacionalesListos, setDatosOperacionalesListos] = useState(false);
+  const [datosCargadosPara, setDatosCargadosPara] = useState<string | null>(null);
+  const claveSesionDatos = usuarioId && rol ? usuarioId + ":" + rol : null;
+  const datosOperacionalesListos = claveSesionDatos !== null && datosCargadosPara === claveSesionDatos;
 
   async function cargarPerfil(userId: string) {
     const { data, error } = await supabase
@@ -809,6 +807,7 @@ function App() {
     await supabase.auth.signOut();
 
     setSesion(null);
+    setDatosCargadosPara(null);
     setRol(null);
     setEquipos([]);
     setAverias([]);
@@ -859,41 +858,6 @@ function App() {
       window.matchMedia("(display-mode: standalone)").matches ||
       navegadorIOS.standalone === true
     );
-  }
-
-  async function comprobarEstadoPush() {
-    if (
-      !("serviceWorker" in navigator) ||
-      !("PushManager" in window) ||
-      !("Notification" in window)
-    ) {
-      setEstadoPush("NO_COMPATIBLE");
-      return;
-    }
-
-    if (esIOS() && !esModoInstalado()) {
-      setEstadoPush("NO_INSTALADA");
-      return;
-    }
-
-    if (Notification.permission === "denied") {
-      setEstadoPush("BLOQUEADA");
-      return;
-    }
-
-    try {
-      const registro = await navigator.serviceWorker.register("/sw.js");
-      const suscripcion = await registro.pushManager.getSubscription();
-
-      setEstadoPush(
-        suscripcion && Notification.permission === "granted"
-          ? "ACTIVA"
-          : "PENDIENTE",
-      );
-    } catch (error) {
-      console.error("Error comprobando Web Push:", error);
-      setEstadoPush("ERROR");
-    }
   }
 
   function obtenerDeviceIdPersistente() {
@@ -2219,14 +2183,46 @@ function App() {
     };
   }, []);
 
+  const alComprobarPush = useEffectEvent(() => sincronizarSuscripcionPushExistente());
   useEffect(() => {
-    if (!sesion || !rol) {
-      return;
+    if (!usuarioId || !rol) return;
+    let activo = true;
+    async function comprobarEstadoPush(): Promise<typeof estadoPush> {
+      if (
+        !("serviceWorker" in navigator) ||
+        !("PushManager" in window) ||
+        !("Notification" in window)
+      ) {
+        return "NO_COMPATIBLE";
+      }
+
+      if (esIOS() && !esModoInstalado()) {
+        return "NO_INSTALADA";
+      }
+
+      if (Notification.permission === "denied") {
+        return "BLOQUEADA";
+      }
+
+      try {
+        const registro = await navigator.serviceWorker.register("/sw.js");
+        const suscripcion = await registro.pushManager.getSubscription();
+
+        return suscripcion && Notification.permission === "granted" ? "ACTIVA" : "PENDIENTE";
+      } catch (error) {
+        console.error("Error comprobando Web Push:", error);
+        return "ERROR";
+      }
     }
 
-    void comprobarEstadoPush();
-    void sincronizarSuscripcionPushExistente();
-  }, [sesion?.user.id, rol]);
+
+    void comprobarEstadoPush().then((estado) => {
+      if (!activo) return;
+      setEstadoPush(estado);
+      void alComprobarPush();
+    });
+    return () => { activo = false; };
+  }, [usuarioId, rol]);
 
   useEffect(() => {
     function actualizarTurno() {
@@ -2265,6 +2261,7 @@ function App() {
         await cargarPerfil(session.user.id);
       } else {
         setRol(null);
+        setDatosCargadosPara(null);
       }
 
       if (activo) {
@@ -2283,6 +2280,7 @@ function App() {
         void cargarPerfil(session.user.id);
       } else {
         setRol(null);
+        setDatosCargadosPara(null);
       }
     });
 
@@ -2293,15 +2291,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!sesion || !rol) {
-      setDatosOperacionalesListos(false);
+    if (!claveSesionDatos) {
       return;
     }
 
     let activo = true;
 
     async function cargarDatosIniciales() {
-      setDatosOperacionalesListos(false);
 
       await Promise.all([
         cargarEquipos(),
@@ -2314,7 +2310,7 @@ function App() {
       ]);
 
       if (activo) {
-        setDatosOperacionalesListos(true);
+        setDatosCargadosPara(claveSesionDatos);
       }
     }
 
@@ -2323,9 +2319,9 @@ function App() {
     return () => {
       activo = false;
     };
-  }, [sesion?.user.id, rol]);
+  }, [claveSesionDatos]);
 
-  useEffect(() => {
+  const alAbrirNotificacion = useEffectEvent(() => {
     if (!sesion || !rol || !datosOperacionalesListos) {
       return;
     }
@@ -2508,18 +2504,42 @@ function App() {
     setAveriaSeleccionadaId(averiaId);
     setVista("detalle-averia");
     limpiarParametrosPush();
-  }, [sesion?.user.id, rol, datosOperacionalesListos, emergencias.length]);
+  });
+  useEffect(() => {
+    if (!usuarioId || !rol || !datosOperacionalesListos) return;
+    const parametros = new URLSearchParams(window.location.search);
+    const esEmergencia = parametros.has("emergencia");
+    const id = Number(parametros.get(esEmergencia ? "emergencia" : "averia"));
+    if (!Number.isInteger(id) || id <= 0) return;
+    let activo = true;
+    // Confirmar que el evento sigue siendo accesible antes de abrir un enlace push antiguo.
+    void supabase.from(esEmergencia ? "emergencias_mina" : "averias")
+      .select("id").eq("id", id).maybeSingle()
+      .then(({ data, error }) => {
+        if (!activo) return;
+        if (error || !data) {
+          console.warn("No se pudo verificar el evento de la notificación:", error);
+          return;
+        }
+        alAbrirNotificacion();
+      });
+    return () => { activo = false; };
+  }, [usuarioId, rol, datosOperacionalesListos, emergencias, averias]);
+
+  const alReconocerEstadoEmergencia = useEffectEvent((id: number) => iniciarSirenaEmergencia(id));
+  const alCambiarTurno = useEffectEvent((turno: TurnoActual) => guardarStatusTurno(turno));
+  const alRecibirNuevaAveria = useEffectEvent((registro: Parameters<typeof manejarNuevaAveriaRealtime>[0]) => manejarNuevaAveriaRealtime(registro));
+  const alRecibirEquipoOperativo = useEffectEvent((registro: Parameters<typeof manejarEquipoOperativoRealtime>[0]) => manejarEquipoOperativoRealtime(registro));
+  const alRecuperarDatos = useEffectEvent((motivo: string) => sincronizarDatosOperacionales(motivo));
 
   useEffect(() => {
-    if (!sesion) {
+    if (!usuarioId) {
       detenerSirenaEmergencia();
-      setAlertaEmergencia(null);
       return;
     }
 
     if (!emergenciaActiva) {
       detenerSirenaEmergencia();
-      setAlertaEmergencia(null);
       return;
     }
 
@@ -2542,7 +2562,7 @@ function App() {
 
       if (!data) {
         setAlertaEmergencia(emergenciaActiva);
-        iniciarSirenaEmergencia(emergenciaActiva.id);
+        alReconocerEstadoEmergencia(emergenciaActiva.id);
       } else {
         detenerSirenaEmergencia();
       }
@@ -2551,7 +2571,7 @@ function App() {
     return () => {
       cancelado = true;
     };
-  }, [sesion?.user.id, emergenciaActiva?.id]);
+  }, [usuarioId, emergenciaActiva]);
 
   useEffect(() => {
     const turnoAnterior = turnoAnteriorRef.current;
@@ -2566,11 +2586,11 @@ function App() {
       return;
     }
 
-    void guardarStatusTurno(turnoAnterior);
-  }, [turnoActual.claveTurno, datosOperacionalesListos, rol]);
+    void alCambiarTurno(turnoAnterior);
+  }, [turnoActual, datosOperacionalesListos, rol]);
 
   useEffect(() => {
-    if (!sesion || !rol) {
+    if (!usuarioId || !rol) {
       return;
     }
 
@@ -2603,11 +2623,11 @@ function App() {
       canalBackupBroadcastRef.current = null;
       void supabase.removeChannel(canalBackup);
     };
-  }, [sesion?.user.id, rol]);
+  }, [usuarioId, rol]);
 
 
   useEffect(() => {
-    if (!sesion || !rol) {
+    if (!usuarioId || !rol) {
       return;
     }
 
@@ -2645,7 +2665,7 @@ function App() {
             payload.averiaId &&
             payload.equipoId
           ) {
-            void manejarNuevaAveriaRealtime({
+            void alRecibirNuevaAveria({
               id: payload.averiaId,
               equipo_id: payload.equipoId,
               sistema: payload.sistema,
@@ -2665,7 +2685,7 @@ function App() {
             payload.averiaId &&
             payload.equipoId
           ) {
-            void manejarEquipoOperativoRealtime({
+            void alRecibirEquipoOperativo({
               id: payload.averiaId,
               equipo_id: payload.equipoId,
               trabajo_realizado: payload.trabajoRealizado,
@@ -2683,13 +2703,12 @@ function App() {
       canalAveriasBroadcastRef.current = null;
       void supabase.removeChannel(canalAverias);
     };
-  }, [sesion?.user.id, rol]);
+  }, [usuarioId, rol]);
 
 
   useEffect(() => {
-    if (!sesion || !rol) {
+    if (!usuarioId || !rol) {
       estadoRealtimeRef.current = "CERRADO";
-      setEstadoRealtime("CERRADO");
       return;
     }
 
@@ -2776,7 +2795,7 @@ function App() {
             // Se conserva EXACTAMENTE la alerta visual + sonido
             // de nueva avería para los demás dispositivos.
             if (payload.eventType === "INSERT") {
-              void manejarNuevaAveriaRealtime(
+              void alRecibirNuevaAveria(
                 payload.new as {
                   id?: number;
                   equipo_id?: number;
@@ -2793,7 +2812,7 @@ function App() {
               (payload.new as { estado_averia?: string }).estado_averia ===
                 "Cerrada"
             ) {
-              void manejarEquipoOperativoRealtime(
+              void alRecibirEquipoOperativo(
                 payload.new as {
                   id?: number;
                   equipo_id?: number;
@@ -2883,7 +2902,7 @@ function App() {
 
             // Al recuperar conexión, reconciliamos por si se perdió
             // algún evento mientras el socket estaba fuera.
-            void sincronizarDatosOperacionales("realtime-conectado");
+            void alRecuperarDatos("realtime-conectado");
             return;
           }
 
@@ -2917,7 +2936,7 @@ function App() {
       }
 
       // Siempre recuperamos el estado verdadero de Supabase.
-      void sincronizarDatosOperacionales(motivo);
+      void alRecuperarDatos(motivo);
 
       // Y si el socket no está suscrito, lo reconstruimos.
       if (estadoRealtimeRef.current !== "SUBSCRIBED") {
@@ -2957,7 +2976,7 @@ function App() {
         navigator.onLine &&
         document.visibilityState === "visible"
       ) {
-        void sincronizarDatosOperacionales("respaldo-10s");
+        void alRecuperarDatos("respaldo-10s");
 
         if (estadoRealtimeRef.current !== "SUBSCRIBED") {
           void crearCanalRealtime("respaldo-10s");
@@ -2987,7 +3006,7 @@ function App() {
         canalActual = null;
       }
     };
-  }, [sesion?.user.id, rol]);
+  }, [usuarioId, rol]);
 
   const averiasAbiertas = averias.filter(
     (averia) => averia.estadoAveria !== "Cerrada",
@@ -3194,8 +3213,12 @@ const averiasCerradasEnTurno = averias.filter(
     setVista("informe-turno");
   }
 
-  function descargarInformePdf() {
-    if (!informeTurno) return;
+  async function descargarInformePdf() {
+    if (!informeTurno || generandoPdfRef.current) return;
+    generandoPdfRef.current = true;
+    setGenerandoPdf(true);
+    try {
+    const { jsPDF } = await import("jspdf");
 
     const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const x = 15;
@@ -3330,6 +3353,13 @@ const averiasCerradasEnTurno = averias.filter(
     pdf.save(
       `ROAC-Informe-${bloqueArchivo}-${informeTurno.turno.tipo.toLowerCase()}-${fecha}.pdf`,
     );
+    } catch (error) {
+      console.error("No se pudo generar el PDF:", error);
+      alert("No se pudo generar el PDF. Comprueba tu conexión e inténtalo nuevamente.");
+    } finally {
+      generandoPdfRef.current = false;
+      setGenerandoPdf(false);
+    }
   }
 
   function obtenerUltimoAvanceInforme(averiaId: number) {
@@ -3585,77 +3615,28 @@ const averiasCerradasEnTurno = averias.filter(
     }
 
     try {
-      const { data: equipoDb, error: errorEquipo } = await supabase
-        .from("equipos")
-        .select("id, estado")
-        .eq("numero_mina", equipoSeleccionado.numeroMina)
-        .single();
-
-      if (errorEquipo || !equipoDb) {
-        console.error(errorEquipo);
-        alert("No se pudo encontrar el equipo en Supabase.");
-        return;
-      }
-
-      if (equipoDb.estado !== "Operativo") {
-        alert(`El equipo ${equipoSeleccionado.numeroMina} ya no está operativo. Recarga los datos e inténtalo nuevamente.`);
-        await cargarEquipos();
-        return;
-      }
-
-      const { error: errorMantenimiento } = await supabase
-        .from("mantenimientos")
-        .insert({
-          equipo_id: equipoDb.id,
-          motivo,
-          responsable,
-          estado: "En curso",
-        });
-
-      if (errorMantenimiento) {
-        console.error(errorMantenimiento);
-        if (errorMantenimiento.code === "23505") {
-          alert(`El equipo ${equipoSeleccionado.numeroMina} ya tiene un mantenimiento activo.`);
-        } else {
-          alert("No se pudo iniciar el mantenimiento programado.");
-        }
-        return;
-      }
-
-      const { error: errorActualizarEquipo } = await supabase
-        .from("equipos")
-        .update({
-          estado: "Mantenimiento programado",
-          es_backup: false,
-        })
-        .eq("id", equipoDb.id);
-
-      if (errorActualizarEquipo) {
-        console.error(errorActualizarEquipo);
-        alert("El mantenimiento fue creado, pero no se pudo actualizar el estado del equipo.");
+      const { data: mantenimientoId, error } = await supabase.rpc(
+        "roac_iniciar_mantenimiento",
+        { p_numero_mina: equipoSeleccionado.numeroMina, p_motivo: motivo, p_responsable: responsable },
+      );
+      if (error || !mantenimientoId) {
+        console.error(error);
+        alert("No se pudo confirmar el mantenimiento. Actualiza los datos antes de reintentar.");
+        await Promise.all([cargarMantenimientos(), cargarEquipos(), cargarBackup()]);
         return;
       }
 
       if (numeroBackup === equipoSeleccionado.numeroMina) {
-        const { error: errorBackup } = await supabase
-          .from("configuracion")
-          .update({ valor: null })
-          .eq("clave", "caex_backup");
-
-        if (errorBackup) {
-          console.error(errorBackup);
-        }
-
         setNumeroBackup(null);
 
         if (canalBackupBroadcastRef.current) {
-          await canalBackupBroadcastRef.current.send({
+          void canalBackupBroadcastRef.current.send({
             type: "broadcast",
             event: "backup_changed",
             payload: {
               numeroMina: null,
             },
-          });
+          }).catch((error) => console.warn("No se pudo emitir el aviso Realtime:", error));
         }
 
         alert(`El CAEX ${equipoSeleccionado.numeroMina} era el backup y entró a mantenimiento programado. Actualmente no hay backup asignado.`);
@@ -3696,32 +3677,14 @@ const averiasCerradasEnTurno = averias.filter(
     }
 
     try {
-      const fechaFin = new Date().toISOString();
-
-      const { error: errorMantenimiento } = await supabase
-        .from("mantenimientos")
-        .update({
-          estado: "Finalizado",
-          trabajo_realizado: trabajo,
-          fecha_fin: fechaFin,
-          updated_at: fechaFin,
-        })
-        .eq("id", mantenimientoSeleccionado.id);
-
-      if (errorMantenimiento) {
-        console.error(errorMantenimiento);
-        alert("No se pudo finalizar el mantenimiento en Supabase.");
-        return;
-      }
-
-      const { error: errorEquipo } = await supabase
-        .from("equipos")
-        .update({ estado: "Operativo" })
-        .eq("numero_mina", mantenimientoSeleccionado.equipo.numeroMina);
-
-      if (errorEquipo) {
-        console.error(errorEquipo);
-        alert("El mantenimiento se cerró, pero no se pudo restaurar el equipo a Operativo.");
+      const { data: equipoId, error } = await supabase.rpc(
+        "roac_finalizar_mantenimiento",
+        { p_mantenimiento_id: mantenimientoSeleccionado.id, p_trabajo: trabajo },
+      );
+      if (error || !equipoId) {
+        console.error(error);
+        alert("No se pudo confirmar el cierre del mantenimiento. Actualiza los datos antes de reintentar.");
+        await Promise.all([cargarMantenimientos(), cargarEquipos()]);
         return;
       }
 
@@ -3852,20 +3815,12 @@ const averiasCerradasEnTurno = averias.filter(
       vence: Date.now() + 15_000,
     };
 
-    // 2. Crear la avería en Supabase
-    const { data: averiaDb, error: errorAveria } = await supabase
-      .from("averias")
-      .insert({
-        equipo_id: equipoDb.id,
-        sistema: datos.sistema,
-        estado_equipo: "Fuera de servicio",
-        estado_averia: "Publicada",
-        ubicacion: datos.ubicacion,
-        detalle_inicial: datos.detalleInicial,
-        informado_por: datos.informadoPor,
-      })
-      .select("id")
-      .single();
+    const { data: averiaId, error: errorAveria } = await supabase.rpc(
+      "roac_publicar_averia",
+      { p_equipo_id: equipoDb.id, p_sistema: datos.sistema, p_ubicacion: datos.ubicacion,
+        p_detalle: datos.detalleInicial, p_informado_por: datos.informadoPor },
+    );
+    const averiaDb = averiaId ? { id: averiaId } : null;
 
     if (errorAveria || !averiaDb) {
       averiaLocalPendienteRef.current = null;
@@ -3876,7 +3831,7 @@ const averiasCerradasEnTurno = averias.filter(
           `El equipo ${equipoSeleccionado.numeroMina} ya tiene una avería abierta.`,
         );
       } else {
-        alert("No se pudo guardar la avería en Supabase.");
+        alert("No se pudo confirmar la avería. Actualiza los datos antes de reintentar.");
       }
 
       return;
@@ -3886,27 +3841,10 @@ const averiasCerradasEnTurno = averias.filter(
     // Desde aquí el Push se ejecuta en segundo plano y nunca bloquea ROAC.
     void enviarPushOperacional("NUEVA_AVERIA", averiaDb.id);
 
-    // 3. Cambiar el estado del equipo en Supabase
-    const { error: errorActualizarEquipo } = await supabase
-      .from("equipos")
-      .update({
-        estado: "Fuera de servicio",
-        es_backup: false,
-      })
-      .eq("id", equipoDb.id);
-
-    if (errorActualizarEquipo) {
-      console.error(errorActualizarEquipo);
-      alert(
-        "La avería fue creada, pero no se pudo actualizar el estado del equipo.",
-      );
-      return;
-    }
-
     // Aviso Realtime dedicado: actualización + alerta visual/sonora inmediata
     // en los demás dispositivos, sin esperar la reconciliación de seguridad.
     if (canalAveriasBroadcastRef.current) {
-      await canalAveriasBroadcastRef.current.send({
+      void canalAveriasBroadcastRef.current.send({
         type: "broadcast",
         event: "averia_changed",
         payload: {
@@ -3916,32 +3854,21 @@ const averiasCerradasEnTurno = averias.filter(
           sistema: datos.sistema,
           informadoPor: datos.informadoPor,
         },
-      });
+      }).catch((error) => console.warn("No se pudo emitir el aviso Realtime:", error));
     }
 
     // 4. Si el equipo era backup, eliminar la asignación
     if (numeroBackup === equipoSeleccionado.numeroMina) {
-      const { error: errorBackup } = await supabase
-        .from("configuracion")
-        .update({
-          valor: null,
-        })
-        .eq("clave", "caex_backup");
-
-      if (errorBackup) {
-        console.error(errorBackup);
-      }
-
       setNumeroBackup(null);
 
       if (canalBackupBroadcastRef.current) {
-        await canalBackupBroadcastRef.current.send({
+        void canalBackupBroadcastRef.current.send({
           type: "broadcast",
           event: "backup_changed",
           payload: {
             numeroMina: null,
           },
-        });
+        }).catch((error) => console.warn("No se pudo emitir el aviso Realtime:", error));
       }
 
       alert(
@@ -4090,77 +4017,33 @@ const averiasCerradasEnTurno = averias.filter(
   }
 
   try {
-    const fechaAtencion = new Date().toISOString();
-
-    const { data: tomada, error: errorAveria } = await supabase
-      .from("averias")
-      .update({
-        estado_averia: "En atención",
-        estado_equipo: "En atención",
-        tomada_por: responsable,
-        fecha_atencion: fechaAtencion,
-      })
-      .eq("id", averiaSeleccionadaId)
-      .eq("estado_averia", "Publicada")
-      .select("id")
-      .maybeSingle();
-
-    if (errorAveria || !tomada) {
-      console.error(errorAveria);
+    const { data: fechaAtencion, error } = await supabase.rpc(
+      "roac_registrar_intervencion",
+      { p_averia_id: averiaSeleccionadaId, p_tipo: "TOMA", p_tecnico: responsable,
+        p_clave_turno: turnoActual.claveTurno },
+    );
+    if (error || !fechaAtencion) {
+      console.error(error);
       alert("No se pudo tomar la avería. Puede haber sido tomada o cerrada por otro técnico. Actualiza los datos antes de reintentar.");
-      await cargarAverias();
+      await Promise.all([cargarAverias(), cargarEquipos(), cargarIntervenciones()]);
       return;
     }
-
-    const { error: errorIntervencion } = await supabase
-      .from("intervenciones_averia")
-      .insert({
-        averia_id: averiaSeleccionadaId,
-        tecnico: responsable,
-        tipo: "TOMA",
-        detalle: "Toma inicial de la avería.",
-        fecha: fechaAtencion,
-        clave_turno: turnoActual.claveTurno,
-      });
-
-    if (errorIntervencion) {
-      console.error("No se pudo registrar la toma en el historial:", errorIntervencion);
-    } else {
-      void cargarIntervenciones();
-    }
-
-    const { error: errorEquipo } = await supabase
-      .from("equipos")
-      .update({
-        estado: "En atención",
-      })
-      .eq(
-        "numero_mina",
-        averiaActual.equipo.numeroMina,
-      );
-
-    if (errorEquipo) {
-      console.error(errorEquipo);
-      alert(
-        "La avería fue tomada, pero no se pudo actualizar el equipo.",
-      );
-      return;
-    }
+    void cargarIntervenciones();
 
     // Broadcast dedicado para que "Tomar avería" sea instantáneo
     // y no dependa de la sincronización de seguridad.
     if (canalAveriasBroadcastRef.current) {
-      await canalAveriasBroadcastRef.current.send({
+      void canalAveriasBroadcastRef.current.send({
         type: "broadcast",
         event: "averia_changed",
         payload: {
           accion: "TOMAR_AVERIA",
           averiaId: averiaSeleccionadaId,
         },
-      });
+      }).catch((error) => console.warn("No se pudo emitir el aviso Realtime:", error));
     }
 
-    const horaAtencion = obtenerHoraActual();
+    const horaAtencion = new Date(fechaAtencion).toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
 
     setAverias((anteriores) =>
       anteriores.map((averia) =>
@@ -4213,16 +4096,10 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
-    const { error } = await supabase
-      .from("intervenciones_averia")
-      .insert({
-        averia_id: averiaSeleccionadaId,
-        tecnico: nombreTecnico,
-        tipo: "AVANCE",
-        detalle: texto,
-        fecha: new Date().toISOString(),
-        clave_turno: turnoActual.claveTurno,
-      });
+    const { error } = await supabase.rpc("roac_registrar_intervencion", {
+      p_averia_id: averiaSeleccionadaId, p_tipo: "AVANCE", p_tecnico: nombreTecnico,
+      p_clave_turno: turnoActual.claveTurno, p_detalle: texto,
+    });
 
     if (error) {
       console.error("No se pudo registrar el avance:", error);
@@ -4254,35 +4131,15 @@ const averiasCerradasEnTurno = averias.filter(
       return;
     }
 
-    const fechaContinuidad = new Date().toISOString();
-
-    const { error: errorAveria } = await supabase
-      .from("averias")
-      .update({
-        tomada_por: tecnico,
-      })
-      .eq("id", averiaSeleccionadaId);
-
-    if (errorAveria) {
-      console.error("No se pudo cambiar el técnico actual:", errorAveria);
-      alert("No se pudo tomar la continuidad de la avería.");
+    const { data: fecha, error } = await supabase.rpc("roac_registrar_intervencion", {
+      p_averia_id: averiaSeleccionadaId, p_tipo: "CONTINUIDAD", p_tecnico: tecnico,
+      p_clave_turno: turnoActual.claveTurno, p_tecnico_anterior: averiaActual.tomadaPor,
+    });
+    if (error || !fecha) {
+      console.error(error);
+      alert("No se pudo confirmar la continuidad. Actualiza los datos antes de reintentar.");
+      await Promise.all([cargarAverias(), cargarIntervenciones()]);
       return;
-    }
-
-    const { error: errorIntervencion } = await supabase
-      .from("intervenciones_averia")
-      .insert({
-        averia_id: averiaSeleccionadaId,
-        tecnico,
-        tipo: "CONTINUIDAD",
-        detalle: `Continuidad de atención. Recibe de ${averiaActual.tomadaPor || "turno anterior"}.`,
-        fecha: fechaContinuidad,
-        clave_turno: turnoActual.claveTurno,
-      });
-
-    if (errorIntervencion) {
-      console.error("No se pudo registrar la continuidad:", errorIntervencion);
-      alert("El técnico cambió, pero no se pudo registrar la continuidad en el historial.");
     }
 
     setAverias((anteriores) =>
@@ -4316,8 +4173,6 @@ const averiasCerradasEnTurno = averias.filter(
   }
 
   try {
-    const fechaCierre = new Date().toISOString();
-
     const { data: equipoIdCerrado, error: errorCierre } = await supabase.rpc(
       "roac_cerrar_averia_atomica",
       { p_averia_id: averiaSeleccionadaId, p_trabajo: trabajoRealizado },
@@ -4355,7 +4210,8 @@ const averiasCerradasEnTurno = averias.filter(
         });
     }
 
-    const horaCierre = obtenerHoraActual();
+    const fechaCierre = new Date().toISOString();
+    const horaCierre = new Date(fechaCierre).toLocaleTimeString("es-CL", { timeZone: "America/Santiago", hour: "2-digit", minute: "2-digit", hour12: false });
 
     setAverias((anteriores) =>
       anteriores.map((averia) =>
@@ -4383,6 +4239,9 @@ const averiasCerradasEnTurno = averias.filter(
           : equipo,
       ),
     );
+
+    // La vista responde al cierre confirmado; luego recupera la fecha del servidor.
+    void Promise.all([cargarAverias(), cargarEquipos()]);
 
     setAveriaSeleccionadaId(null);
     setVista("averias");
@@ -4423,45 +4282,13 @@ const averiasCerradasEnTurno = averias.filter(
     }
 
     try {
-      const { error: errorLimpiarBackup } = await supabase
-        .from("equipos")
-        .update({ es_backup: false })
-        .eq("tipo", "CAEX");
-
-      if (errorLimpiarBackup) {
-        console.error(errorLimpiarBackup);
-        alert("No se pudo limpiar la asignación de backup.");
-        return;
-      }
-
-      if (numeroMina !== null) {
-        const { error: errorAsignarBackup } = await supabase
-          .from("equipos")
-          .update({ es_backup: true })
-          .eq("numero_mina", numeroMina);
-
-        if (errorAsignarBackup) {
-          console.error(errorAsignarBackup);
-          alert("No se pudo asignar el CAEX como backup.");
-          return;
-        }
-      }
-
-      const { error: errorConfiguracion } = await supabase
-        .from("configuracion")
-        .upsert(
-          {
-            clave: "caex_backup",
-            valor: numeroMina,
-          },
-          {
-            onConflict: "clave",
-          },
-        );
-
-      if (errorConfiguracion) {
-        console.error(errorConfiguracion);
-        alert("No se pudo guardar la configuración de backup.");
+      const { data: confirmado, error } = await supabase.rpc(
+        "roac_asignar_backup", { p_numero_mina: numeroMina },
+      );
+      if (error || confirmado !== true) {
+        console.error(error);
+        alert("No se pudo confirmar el cambio de backup. Actualiza los datos antes de reintentar.");
+        await Promise.all([cargarEquipos(), cargarBackup()]);
         return;
       }
 
@@ -4471,13 +4298,13 @@ const averiasCerradasEnTurno = averias.filter(
       ]);
 
       if (canalBackupBroadcastRef.current) {
-        await canalBackupBroadcastRef.current.send({
+        void canalBackupBroadcastRef.current.send({
           type: "broadcast",
           event: "backup_changed",
           payload: {
             numeroMina,
           },
-        });
+        }).catch((error) => console.warn("No se pudo emitir el aviso Realtime:", error));
       }
 
       setVista("inicio");
@@ -8587,8 +8414,10 @@ const averiasCerradasEnTurno = averias.filter(
               type="button"
               className="report-action-button report-print-button"
               onClick={descargarInformePdf}
+              disabled={generandoPdf}
+              aria-busy={generandoPdf}
             >
-              Descargar PDF
+              {generandoPdf ? "Generando PDF…" : "Descargar PDF"}
             </button>
           </div>
 
